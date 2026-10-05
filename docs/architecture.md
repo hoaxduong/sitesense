@@ -2,23 +2,25 @@
 
 ## Application boundaries
 
-`apps/web` owns the user interface and Next.js server routes. `apps/api` owns domain operations and their FastAPI contract. Browser code does not need the backend's private deployment address: the frontend uses `API_BASE_URL` on the server when contacting the API.
+SiteSense is one Python app. `app.py` is the Streamlit entry point and delegates rendering to `src/sitesense/app.py`. As data preparation and modeling are added, keep their reusable logic in Python modules under `src/sitesense` so the UI and notebooks can call the same code directly.
 
-`packages/api-client` provides the shared client and generated TypeScript types. FastAPI models define the contract; `pnpm generate` exports `apps/api/openapi.json` and generates `packages/api-client/src/schema.d.ts`. Keep generated artifacts in Git so frontend builds do not depend on a running API. CI detects stale artifacts by regenerating them.
+Streamlit runs Python on its server and communicates with browsers through its own runtime. There is no separate API service or generated JavaScript client. The current scaffold displays research readiness and the research sequence; it does not query external services or score locations.
 
-The API is a standalone uv project with a packaged `src` layout. Its `package.json` exposes Python commands to Turborepo; it does not replace `pyproject.toml` or create a second Python dependency graph. A root uv workspace is unnecessary while the repository contains one Python project.
+## Dependencies and commands
 
-## Dependency and task model
+uv owns the root `pyproject.toml`, `uv.lock`, and `.venv`. Runtime dependencies include Streamlit. Development tools live in the `dev` group, and data exploration dependencies live in the optional `notebooks` group. CI validates the lockfile before frozen installation because `uv sync --frozen` does not check whether the manifest changed.
 
-pnpm installs JavaScript dependencies from `pnpm-lock.yaml`. uv installs Python dependencies from `apps/api/uv.lock`. CI validates the Python lockfile before using frozen installs because `uv sync --frozen` does not check whether the manifest changed.
+Run `uv run --frozen streamlit run app.py` for local development. Streamlit has no static frontend bundle; `uv build` packages the Python project. The Docker image installs only runtime dependencies and starts the same entry point as a non-root user.
 
-Turborepo schedules lint, type checks, tests, and builds through package scripts. The frontend depends on the shared API client, so dependency builds precede its production build. Development servers are persistent, uncached tasks. Generated contracts are refreshed explicitly with `pnpm generate` and verified in CI.
+Run `uv run --frozen python scripts/check.py` for lockfile validation, Ruff, mypy, AppTest tests, and Python package builds. CI runs the same command and a separate Streamlit smoke check. No Node.js toolchain is required.
 
-Environment settings that affect cached tasks must appear in `turbo.json`. Keep secrets in local environment files or the eventual hosting platform's secret store. `API_BASE_URL` is server-side configuration and must not receive a `NEXT_PUBLIC_` prefix.
+Configuration lives in `.streamlit/config.toml`. Keep credentials in ignored `.streamlit/secrets.toml` or a hosting platform's secret store. Avoid exposing credentials or private configuration through rendered content.
 
-## Current service behavior
+## Validation boundaries
 
-The API's versioned health endpoint returns `{"status":"ok","service":"sitesense-api"}`; `/healthz` provides the same service check. Interactive API documentation is available in development and disabled in production. The frontend health route reports backend connectivity. These are operational checks, not evidence that a dataset or model is ready.
+Streamlit's `/_stcore/health` endpoint checks its server. AppTest executes the actual page and verifies readiness messaging, research steps, and analytical caveats without a browser. The smoke script starts a real headless server on a temporary port, checks its health and homepage response, and executes the page with AppTest. It cleans up the server afterward.
+
+These checks do not prove browser WebSocket behavior, production deployment, dataset quality, model accuracy, or readiness to assess a location. The notebook remains the first data exploration workflow and must be run separately with the optional notebook dependencies.
 
 ## Research and data boundaries
 

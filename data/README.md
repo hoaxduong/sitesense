@@ -5,11 +5,11 @@
 From the repository root:
 
 ```sh
-uv sync --frozen --project apps/api --group notebooks
-uv run --frozen --project apps/api --group notebooks jupyter lab --notebook-dir=.
+uv sync --frozen --group notebooks
+uv run --frozen --group notebooks jupyter lab --notebook-dir=.
 ```
 
-Open `notebooks/01_yelp_dataset_exploration.ipynb` and run the cells in order. In VS Code, select `apps/api/.venv/bin/python` as the kernel.
+Open `notebooks/01_yelp_dataset_exploration.ipynb` and run the cells in order. In VS Code, select `.venv/bin/python` as the kernel.
 
 The ZIP contains a gzip-compressed `yelp_dataset.tar`. The notebook scans the nested TAR once, staging the complete business/check-in JSON and a bounded review prefix under `data/raw/yelp_exploration/`. It does not extract the full review or user tables. A cache manifest reuses staged files when the archive and review sample size match; ZIPs containing JSON directly are also supported.
 
@@ -19,7 +19,7 @@ To execute without opening Jupyter:
 
 ```sh
 mkdir -p data/processed
-uv run --frozen --project apps/api --group notebooks jupyter nbconvert \
+uv run --frozen --group notebooks jupyter nbconvert \
   --to notebook --execute --ExecutePreprocessor.timeout=1800 \
   --output-dir=data/processed notebooks/01_yelp_dataset_exploration.ipynb
 ```

@@ -1,11 +1,5 @@
-# JavaScript
-node_modules/
-.pnpm-store/
-.next/
-out/
-.turbo/
+# Build artifacts
 dist/
-*.tsbuildinfo
 
 # Python
 .venv/
@@ -24,7 +18,7 @@ htmlcov/
 .env.*
 !.env.example
 !.env.*.example
-.vercel/
+.streamlit/secrets.toml
 
 # Data and model artifacts stay local
 data/raw/*
