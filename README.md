@@ -68,7 +68,7 @@ notebooks/              Dataset download and initial experiments
 data/                   Local source and analysis artifacts
 ```
 
-See [architecture.md](docs/architecture.md) for application boundaries and research principles.
+See [the technology stack guide](docs/tech-stack.md) for versions, component details, tradeoffs, and why each technology fits SiteSense. See [architecture.md](docs/architecture.md) for application boundaries and research principles.
 
 ## Container
 

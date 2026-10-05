@@ -32,7 +32,7 @@ These checks do not prove browser WebSocket behavior, production deployment, dat
 
 ## Research and data boundaries
 
-The linked product conversation frames SiteSense as weather-aware retail location assessment. The scaffold deliberately starts with application infrastructure; it does not contain a trained model, a populated dataset, or a scoring service.
+The linked product conversation frames SiteSense as weather-aware retail location assessment. The scaffold deliberately starts with application infrastructure; no dataset is connected to the UI, and it does not contain a trained weather-aware model or a scoring service. Local research artifacts and notebook baselines exist separately from the app. See [the technology stack guide](tech-stack.md) for the tools and current data paths.
 
 The first analytical increment should audit source data and define the target before adding prediction endpoints. Check-ins measure recorded activity and may contain repeated visitors, sampling bias, or source changes. Do not reinterpret them as unique customers or revenue.
 
