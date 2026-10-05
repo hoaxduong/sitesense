@@ -1,0 +1,36 @@
+# JavaScript
+node_modules/
+.next/
+out/
+.turbo/
+dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+.vercel/
+
+# Data and model artifacts stay local
+data/raw/*
+data/interim/*
+data/processed/*
+models/*
+!**/.gitkeep
+
+# Operating system / logs
+.DS_Store
+*.log
