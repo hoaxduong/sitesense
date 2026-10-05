@@ -2,6 +2,10 @@
 
 Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and Yelp exploration notebook share a uv project. Application data ingestion, trained weather models, and location scoring are future work.
 
+## Project features
+
+See [the project features](docs/features.md) for the six planned capabilities, covering location recommendations, activity analysis, weather impacts, forecasting, site comparison, and explainability.
+
 ## Start development
 
 Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with Compose v2 or newer. Install uv using the [official instructions](https://docs.astral.sh/uv/getting-started/installation/). Use `docker-compose` in place of `docker compose` if Compose is installed as a standalone command.
