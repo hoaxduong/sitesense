@@ -8,17 +8,25 @@ Streamlit runs Python on its server and communicates with browsers through its o
 
 ## Dependencies and commands
 
-uv owns the root `pyproject.toml`, `uv.lock`, and `.venv`. Runtime dependencies include Streamlit. Development tools live in the `dev` group, and data exploration dependencies live in the optional `notebooks` group. CI validates the lockfile before frozen installation because `uv sync --frozen` does not check whether the manifest changed.
+uv owns the root `pyproject.toml`, `uv.lock`, and `.venv`. Runtime dependencies include Streamlit and Psycopg 3. Development tools live in the `dev` group, and data exploration dependencies live in the optional `notebooks` group. CI validates the lockfile before frozen installation because `uv sync --frozen` does not check whether the manifest changed.
 
-Run `uv run --frozen streamlit run app.py` for local development. Streamlit has no static frontend bundle; `uv build` packages the Python project. The Docker image installs only runtime dependencies and starts the same entry point as a non-root user.
+For local development, start PostgreSQL with `docker compose up --detach --wait db`, apply migrations with `uv run --frozen --env-file .env python -m sitesense.database migrate`, and run `uv run --frozen --env-file .env streamlit run app.py`. Streamlit runs on the host with hot reload. Streamlit has no static frontend bundle; `uv build` packages the Python project, including its SQL migrations. The Docker image installs only runtime dependencies and starts the same entry point as a non-root user.
 
 Run `uv run --frozen python scripts/check.py` for lockfile validation, Ruff, mypy, AppTest tests, and Python package builds. CI runs the same command and a separate Streamlit smoke check. No Node.js toolchain is required.
 
-Configuration lives in `.streamlit/config.toml`. Keep credentials in ignored `.streamlit/secrets.toml` or a hosting platform's secret store. Avoid exposing credentials or private configuration through rendered content.
+Configuration lives in `.streamlit/config.toml`. The PostgreSQL module reads `DATABASE_URL` from the environment; local development loads ignored `.env`, while deployments use their secret store. Keep other credentials in ignored `.streamlit/secrets.toml` or a hosting platform's secret store. Avoid exposing credentials or private configuration through rendered content.
+
+## Database boundary
+
+PostgreSQL is the primary store for structured application data. `src/sitesense/database.py` provides short-lived transactional connections and an explicit migration CLI without a dependency on Streamlit. The initial `sitesense.datasets` table stores dataset provenance. Versioned SQL migrations are checksum-validated and serialized with a transaction-level advisory lock; they never run during UI rendering. See [database.md](database.md) for local operations and deployment configuration.
+
+Raw archives and bulk notebook artifacts stay on disk or object storage. The research scaffold does not yet query the registry, and the existing notebook does not automatically import into PostgreSQL. Database availability and schema setup do not imply research readiness.
 
 ## Validation boundaries
 
 Streamlit's `/_stcore/health` endpoint checks its server. AppTest executes the actual page and verifies readiness messaging, research steps, and analytical caveats without a browser. The smoke script starts a real headless server on a temporary port, checks its health and homepage response, and executes the page with AppTest. It cleans up the server afterward.
+
+Database integration tests use `TEST_DATABASE_URL` and create disposable databases to verify migrations, persistence, rollback, and checksum validation; CI supplies a PostgreSQL 18 service. Without this variable, the regular checks skip database integration tests and run without external services.
 
 These checks do not prove browser WebSocket behavior, production deployment, dataset quality, model accuracy, or readiness to assess a location. The notebook remains the first data exploration workflow and must be run separately with the optional notebook dependencies.
 
