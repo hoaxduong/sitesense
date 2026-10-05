@@ -17,6 +17,16 @@ dev = [
     "pytest>=8.3,<10",
     "ruff>=0.9,<1",
 ]
+notebooks = [
+    "gdown>=5.2,<7",
+    "ipykernel>=6.29,<8",
+    "jupyterlab>=4.3,<5",
+    "matplotlib>=3.9,<4",
+    "nbclient>=0.10,<1",
+    "nbconvert>=7.16,<8",
+    "nbformat>=5.10,<6",
+    "pandas>=2.2,<4",
+]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]

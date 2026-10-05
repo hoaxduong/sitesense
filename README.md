@@ -2,7 +2,7 @@
 
 Weather-aware retail location assessment. SiteSense will compare seasonal activity baselines with weather-aware models before using those models to rank candidate locations.
 
-This repository initializes the application and its development workflow. It includes a Next.js frontend, a Python API, and a generated API contract. Data ingestion, model training, and location scoring are future work.
+This repository initializes the application and its development workflow. It includes a Next.js frontend, a Python API, a generated API contract, and a notebook for downloading and exploring Yelp data. Production ingestion, trained weather models, and location scoring are future work.
 
 ## Requirements
 
@@ -50,6 +50,19 @@ The frontend uses the private, server-side `API_BASE_URL` setting to contact the
 
 After changing API request or response models, run `pnpm generate` and commit both generated files: `apps/api/openapi.json` and `packages/api-client/src/schema.d.ts`. CI regenerates the contract and rejects drift.
 
+## Explore the dataset
+
+Open [the Yelp exploration notebook](notebooks/01_yelp_dataset_exploration.ipynb) to download the linked Google Drive archive, inspect business and check-in data, and compare seasonal activity baselines on a temporal holdout.
+
+From the repository root:
+
+```sh
+uv sync --frozen --project apps/api --group notebooks
+uv run --frozen --project apps/api --group notebooks jupyter lab --notebook-dir=.
+```
+
+In VS Code, select `apps/api/.venv/bin/python` as the notebook kernel. Allow approximately 5 GB of free disk space for the 4.35 GB archive and working files. The ZIP contains a gzip-compressed TAR; the notebook scans it once to stage business/check-in JSON and a bounded review prefix, then reuses those files on matching reruns. Downloads and analysis outputs stay local under `data/`. See [data/README.md](data/README.md) for details and headless execution.
+
 ## Workspace
 
 ```text
@@ -60,6 +73,10 @@ packages/
   api-client/           Shared client and generated OpenAPI types
 docs/
   architecture.md       Application boundaries and evaluation principles
+notebooks/
+  01_yelp_dataset_exploration.ipynb  Dataset download and initial experiments
+data/
+  raw/                  Local source archives, ignored by Git
 ```
 
 Turborepo coordinates package tasks and caches completed checks and builds. pnpm owns JavaScript dependencies; uv owns the API's Python environment and `apps/api/uv.lock`. See [architecture.md](docs/architecture.md) for the task graph and research boundaries.
