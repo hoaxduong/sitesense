@@ -1,6 +1,6 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and Yelp exploration notebook share a uv project. Data ingestion, trained weather models, and location scoring are future work.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and Yelp exploration notebook share a uv project. Application data ingestion, trained weather models, and location scoring are future work.
 
 ## Start development
 
@@ -39,6 +39,8 @@ uv run --frozen --group notebooks jupyter lab --notebook-dir=.
 ```
 
 In VS Code, select `.venv/bin/python` as the notebook kernel. Notebook dependencies are optional and stay out of the production app installation. Allow approximately 5 GB of free disk space for the 4.35 GB archive and working files. The ZIP contains a gzip-compressed TAR; the notebook scans it once to stage business/check-in JSON and a bounded review prefix, then reuses those files on matching reruns. Downloads and analysis outputs stay local under `data/`. See [data/README.md](data/README.md) for details and headless execution.
+
+Open [the weather notebook](notebooks/02_yelp_weather_dataset_exploration.ipynb) to download ERA5 weather for every Yelp dataset location and explore daily/monthly summaries. Its **Download data** section prepares the mapping and reuses verified yearly files. All acquisition code lives in the notebook. See [the weather guide](docs/weather-data.md) for the local subset, provenance, schema, and timestamp alignment before joining weather to activity.
 
 ## Validation
 

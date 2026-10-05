@@ -24,6 +24,16 @@ uv run --frozen --group notebooks jupyter nbconvert \
   --output-dir=data/processed notebooks/01_yelp_dataset_exploration.ipynb
 ```
 
-Downloaded archives and generated outputs stay local and are ignored by Git. Keep the source notebook free of executed outputs before committing. You can also download an archive manually from the [Yelp Open Dataset page](https://www.yelp.com/dataset/download) and place it under `data/raw/`.
+Downloaded archives and generated outputs stay local and are ignored by Git. Keep the source notebook free of executed outputs before committing. Executed notebook copies are optional review artifacts; remove them after inspecting them. You can also download an archive manually from the [Yelp Open Dataset page](https://www.yelp.com/dataset/download) and place it under `data/raw/`.
+
+Retain the Yelp ZIP, staged business/check-in/review files, and staging manifest for offline reruns. The notebook checks the ZIP on every run and uses the manifest to reuse the staged files.
 
 Check-ins are recorded activity, not unique customers or revenue. This archive does not supply a weather dataset; these experiments do not establish weather effects or support causal claims. Audit source coverage, missingness, and timestamp meaning before extending the analysis.
+
+See [the climate dataset shortlist](../docs/research/climate-datasets.md) for historical weather sources, verified sample availability, and the acquisition plan for the Philadelphia pilot.
+
+See [weather for every Yelp location](../docs/weather-data.md) for the hourly CSV schema, acquisition audits, and timezone alignment caveats. Local weather outputs live under `data/processed/yelp_weather/`.
+
+Open [the weather notebook](../notebooks/02_yelp_weather_dataset_exploration.ipynb) to prepare the mapping and download ERA5 weather for all 150,346 business locations, then explore coverage, geographic and seasonal charts, and daily/monthly UTC summaries. Its **Download data** section reuses verified yearly files and fetches missing or corrupt partitions. All download and analysis code lives in the notebook and uses the same `notebooks` dependency group. The two weather exports are saved under `data/processed/yelp_weather_exploration/`.
+
+The weather dataset keeps 14 annual files, the business mapping, cell table, scope/download manifests, and `ATTRIBUTION.txt`. Yelp analysis exports and the two daily/monthly weather summaries remain as useful notebook deliverables; rerunning the notebooks regenerates them.
