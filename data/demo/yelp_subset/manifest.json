@@ -1,0 +1,62 @@
+{
+  "source_kind": "synthetic",
+  "scope": {
+    "regions": [
+      [
+        "nashville",
+        "TN"
+      ],
+      [
+        "philadelphia",
+        "PA"
+      ],
+      [
+        "tampa",
+        "FL"
+      ]
+    ],
+    "category": "Restaurants",
+    "import_version": 1
+  },
+  "summary": {
+    "businesses": {
+      "Philadelphia, PA": 5,
+      "Tampa, FL": 5,
+      "Nashville, TN": 5
+    },
+    "businesses_with_checkins": {
+      "Philadelphia, PA": 4,
+      "Tampa, FL": 4,
+      "Nashville, TN": 4
+    },
+    "checkins": {
+      "Philadelphia, PA": 720,
+      "Tampa, FL": 720,
+      "Nashville, TN": 720
+    },
+    "weather_cells": 3,
+    "first_timestamp_naive": "2021-01-01T12:00:00",
+    "last_timestamp_naive": "2021-03-31T12:30:00",
+    "weather_observations": 0,
+    "timestamp_semantics": "unresolved_naive_source"
+  },
+  "notice": "Fictional software demo only; not evidence of demand or model accuracy.",
+  "files": {
+    "LICENSE.txt": {
+      "bytes": 160,
+      "sha256": "aad16c9b71edcf3787b726c8634ae0fadd5db20c129ab7998ca52c33e6e9b30f"
+    },
+    "weather_cells.csv": {
+      "bytes": 113,
+      "sha256": "22891c718b17ec9a54187c3b3d5e16ca34b4f88f2a1f11cb8c70df0445788102"
+    },
+    "yelp_academic_dataset_business.json.gz": {
+      "bytes": 387,
+      "sha256": "9d8a55a7f2155e390ac8ff9972e0af7ea7c66e25377717e793ef68fbce11fdc8"
+    },
+    "yelp_academic_dataset_checkin.json.gz": {
+      "bytes": 1686,
+      "sha256": "e992bd8dcefcde28b9b0675c8a8710b07c6109da48f066590b78bf98cce3f94d"
+    }
+  }
+}

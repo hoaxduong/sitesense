@@ -12,5 +12,6 @@ tests
 scripts
 dist
 data
+archive
 models
 notebooks

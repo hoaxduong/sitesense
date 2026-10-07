@@ -23,6 +23,15 @@ Existing shell variables override `.env` values in both Compose and `uv`. Check 
 
 ## Application connections
 
+For an already running local PostgreSQL service, skip `docker compose up` and set
+ignored `.env` to that service's host, port, user and database. All application
+tables are isolated in schema `sitesense`; migrations do not create a new database.
+For example, use database `postgres`, user `postgres`, host `localhost`, port `5432`,
+and supply your local password only in `.env`. Do not commit the configured URL.
+On Windows, `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start.ps1`
+applies migrations and starts Streamlit using `.env`. This helper also finds the
+project-local uv executable when uv is not on PATH.
+
 Load `DATABASE_URL` through the environment, using `uv run --frozen --env-file .env` for local Python or notebook commands. Outside local development, set it through the hosting platform's secret store. The URL uses the standard `postgresql://` scheme; it does not use an ORM driver suffix. Include the provider's required TLS settings, such as `sslmode=verify-full` and its trusted CA configuration.
 
 ```python
@@ -37,7 +46,7 @@ with connect() as connection:
 
 Use parameter binding for values. Each connection context commits on success, rolls back on failure, and closes on exit. Do not share an open transaction between Streamlit sessions or cache an individual connection. There is no automatic migration during Streamlit reruns.
 
-The registry tracks dataset provenance only. Registering a dataset does not import its records, establish source coverage, or verify research readiness. The research page continues to state that check-in data, weather, and a trained model are not connected.
+The registry tracks dataset provenance only. Registering a dataset does not import its records, establish source coverage, or verify research readiness. The [Yelp subset importer](yelp-subset.md) separately imports selected businesses, check-ins, and weather-cell mappings using the second migration. The research page continues to state that check-in data, weather, and a trained model are not connected to the UI.
 
 ## Migrations
 

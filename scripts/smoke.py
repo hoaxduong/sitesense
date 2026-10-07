@@ -40,7 +40,10 @@ def wait_until_healthy(url: str, process: subprocess.Popen[str], output: TextIO)
 def main() -> None:
     port = available_port()
     base_url = f"http://127.0.0.1:{port}"
-    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        (Path(temporary) / "streamlit.log").open("w+", encoding="utf-8") as output,
+    ):
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -69,7 +72,16 @@ def main() -> None:
             assert process.poll() is None
             print("Smoke passed: Streamlit server, app rendering, and research readiness.")
         finally:
-            process.terminate()
+            if sys.platform == "win32" and process.poll() is None:
+                # Windows virtualenv launchers can spawn a child interpreter.
+                # Stop this server's whole process tree before removing its log.
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:

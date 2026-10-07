@@ -21,6 +21,8 @@ htmlcov/
 .streamlit/secrets.toml
 
 # Data and model artifacts stay local
+archive/
+data/local/
 data/raw/*
 data/interim/*
 data/processed/*
@@ -28,5 +30,6 @@ models/*
 !**/.gitkeep
 
 # Operating system / logs
+.idea/
 .DS_Store
 *.log

@@ -21,6 +21,12 @@ uv run --frozen --env-file .env streamlit run app.py
 
 Open <http://localhost:8501>. PostgreSQL 18 runs on `127.0.0.1:5432`, and Streamlit runs on the host with hot reload. PostgreSQL data lives in a named Docker volume and survives container restarts. Streamlit executes Python on its server; reusable application code lives in `src/sitesense`. No separate API server is required.
 
+If PostgreSQL is already installed and running locally, configure its connection in
+ignored `.env` and skip the Docker database command. The project uses schema
+`sitesense` within the configured database. On Windows, start with
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start.ps1`; this applies
+migrations and runs the app at <http://localhost:8501>.
+
 Inspect the database or stop it while preserving data:
 
 ```sh
@@ -34,6 +40,8 @@ Stopping Streamlit with Ctrl+C leaves PostgreSQL running. If port 5432 is alread
 Configuration is in `.streamlit/config.toml`. Local database credentials are in ignored `.env`; keep other credentials in ignored `.streamlit/secrets.toml` or your hosting platform's secret store, and avoid rendering secrets in the UI. The database module reads `DATABASE_URL` from the process environment; `uv run --env-file .env` loads it for local commands.
 
 ## Explore the dataset
+
+The repository includes a tiny [fictional activity demo](data/demo/yelp_subset/README.md) that collaborators can import after cloning. Run `uv run --frozen --env-file .env python -m sitesense.yelp_import import` after migrations. See [the subset import guide](docs/yelp-subset.md) to prepare licensed Yelp data locally and import only selected cities/categories. The default scope is Restaurants in Philadelphia, Tampa, and Nashville. Real Yelp data stays outside Git. Weather-cell metadata is separate from actual weather observations, which are not included in this step.
 
 Open [the Yelp exploration notebook](notebooks/01_yelp_dataset_exploration.ipynb) to download the linked Google Drive archive, inspect business and check-in data, and compare seasonal activity baselines on a temporal holdout.
 
