@@ -4,6 +4,7 @@ import hashlib
 import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import uuid4
@@ -12,7 +13,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from sitesense import database
+from sitesense import database, dataset_bundle, yelp_import
 
 
 def test_missing_database_url_is_safe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,8 +53,9 @@ def test_connect_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_packaged_migration_checksums_match_contents() -> None:
     migrations = database._load_migrations()
-    assert [migration.version for migration in migrations] == ["001_datasets"]
-    assert migrations[0].checksum == hashlib.sha256(migrations[0].sql.encode()).hexdigest()
+    assert [migration.version for migration in migrations] == ["001_datasets", "002_yelp_subset"]
+    for migration in migrations:
+        assert migration.checksum == hashlib.sha256(migration.sql.encode()).hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -122,12 +124,13 @@ def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_migrations_are_idempotent_and_status_is_read_only(isolated_database: None) -> None:
-    assert database.status() == [("001_datasets", False)]
+    versions = [migration.version for migration in database._load_migrations()]
+    assert database.status() == [(version, False) for version in versions]
     with database.connect() as connection:
         assert connection.execute("SELECT to_regnamespace('sitesense')").fetchone() == (None,)
-    assert database.migrate() == ["001_datasets"]
+    assert database.migrate() == versions
     assert database.migrate() == []
-    assert database.status() == [("001_datasets", True)]
+    assert database.status() == [(version, True) for version in versions]
     with database.connect() as connection:
         row = connection.execute(
             """INSERT INTO sitesense.datasets (name, source_uri, version)
@@ -165,7 +168,7 @@ def test_a_failed_migration_rolls_back_the_entire_run(
     isolated_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     migrations = database._load_migrations()
-    migrations.append(database._Migration("002_failure", "SELECT 1 / 0", "test-checksum"))
+    migrations.append(database._Migration("003_failure", "SELECT 1 / 0", "test-checksum"))
     monkeypatch.setattr(database, "_load_migrations", lambda: migrations)
     with pytest.raises(psycopg.errors.DivisionByZero):
         database.migrate()
@@ -187,13 +190,13 @@ def test_an_earlier_migration_cannot_be_inserted_after_later_versions_are_applie
     isolated_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     migrations = database._load_migrations()
-    migrations.append(database._Migration("003_later", "SELECT 1", "later-checksum"))
+    migrations.append(database._Migration("004_later", "SELECT 1", "later-checksum"))
     monkeypatch.setattr(database, "_load_migrations", lambda: migrations)
-    assert database.migrate() == ["001_datasets", "003_later"]
+    assert database.migrate() == ["001_datasets", "002_yelp_subset", "004_later"]
     migrations.insert(
-        1,
+        2,
         database._Migration(
-            "002_inserted", "CREATE TABLE sitesense.inserted (id integer)", "inserted-checksum"
+            "003_inserted", "CREATE TABLE sitesense.inserted (id integer)", "inserted-checksum"
         ),
     )
     with pytest.raises(database.MigrationError, match="must form a prefix"):
@@ -223,3 +226,70 @@ def test_concurrent_migration_runners_are_serialized(
         results = [future.result(timeout=10) for future in futures]
     assert results.count(["001_datasets"]) == 1
     assert results.count([]) == 1
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_yelp_import_is_scoped_idempotent_and_preserves_counts(
+    isolated_database: None, yelp_archive: Path, compressed: bool
+) -> None:
+    database.migrate()
+    if compressed:
+        destination = yelp_archive / "subset"
+        dataset_bundle.export_subset(yelp_archive, destination, [("tampa", "FL")], "Restaurants")
+        yelp_archive = destination
+    first = yelp_import.import_subset(yelp_archive, [("tampa", "FL")], "Restaurants")
+    second = yelp_import.import_subset(yelp_archive, [("tampa", "FL")], "Restaurants")
+    assert first["reused"] is False
+    assert second["reused"] is True
+    assert first["import_run_id"] == second["import_run_id"]
+    with database.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM sitesense.businesses").fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM sitesense.import_runs").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*), sum(event_count) FROM sitesense.checkin_events"
+        ).fetchone() == (2, 3)
+        assert connection.execute(
+            "SELECT business_id, checkin_count FROM sitesense.business_activity_daily "
+            "ORDER BY source_date"
+        ).fetchall() == [("selected", 2), ("selected", 1)]
+        assert connection.execute(
+            "SELECT count(*) FROM sitesense.business_weather_mapping"
+        ).fetchone() == (2,)
+        assert connection.execute("SELECT count(*) FROM sitesense.weather_hourly").fetchone() == (
+            0,
+        )
+
+
+def test_yelp_import_database_failure_rolls_back_registry_and_records(
+    isolated_database: None, yelp_archive: Path
+) -> None:
+    database.migrate()
+    path = yelp_archive / "yelp_academic_dataset_business.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace('"stars": 4.0', '"stars": 9.0'), encoding="utf-8"
+    )
+    with pytest.raises(psycopg.errors.CheckViolation):
+        yelp_import.import_subset(yelp_archive, [("tampa", "FL")], "Restaurants")
+    with database.connect() as connection:
+        for table in ("datasets", "import_runs", "businesses", "weather_cells"):
+            assert connection.execute(
+                sql.SQL("SELECT count(*) FROM sitesense.{}").format(sql.Identifier(table))
+            ).fetchone() == (0,)
+
+
+def test_synthetic_demo_import_is_labelled_and_complete(
+    isolated_database: None, tmp_path: Path
+) -> None:
+    database.migrate()
+    destination = tmp_path / "demo"
+    manifest = dataset_bundle.create_demo(destination)
+    result = yelp_import.import_subset(
+        destination, yelp_import.regions_from_args(yelp_import.DEFAULT_REGIONS), "Restaurants"
+    )
+    assert result["source_kind"] == "synthetic"
+    assert result["summary"] == manifest["summary"]
+    with database.connect() as connection:
+        assert connection.execute("SELECT name FROM sitesense.datasets").fetchone() == (
+            "Synthetic activity demo",
+        )
+        assert connection.execute("SELECT count(*) FROM sitesense.businesses").fetchone() == (15,)
