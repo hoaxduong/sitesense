@@ -37,3 +37,24 @@ See [weather for every Yelp location](../docs/weather-data.md) for the hourly CS
 Open [the weather notebook](../notebooks/02_yelp_weather_dataset_exploration.ipynb) to prepare the mapping and download ERA5 weather for all 150,346 business locations, then explore coverage, geographic and seasonal charts, and daily/monthly UTC summaries. Its **Download data** section reuses verified yearly files and fetches missing or corrupt partitions. All download and analysis code lives in the notebook and uses the same `notebooks` dependency group. The two weather exports are saved under `data/processed/yelp_weather_exploration/`.
 
 The weather dataset keeps 14 annual files, the business mapping, cell table, scope/download manifests, and `ATTRIBUTION.txt`. Yelp analysis exports and the two daily/monthly weather summaries remain as useful notebook deliverables; rerunning the notebooks regenerates them.
+
+## Forecasting comparison
+
+Open [notebook 03](../notebooks/03_forecasting_model_comparison.ipynb) after the two exploration notebooks have staged Yelp and hourly ERA5. It runs offline without PostgreSQL or API credentials. Its explanations are in simple Vietnamese; reusable preparation and evaluation code lives in `src/sitesense/forecast_data.py` and `src/sitesense/forecast_models.py`.
+
+The default scope is Restaurants in Philadelphia, Tampa, and Nashville from 2013–2021. A fixed cohort is chosen using only early training activity. The notebook compares three baselines and Poisson regression, histogram gradient boosting, and CatBoost. Learned models have matching search budgets with and without observed weather. Features use earlier check-ins; preprocessing fits only on training rows.
+
+Two expanding validation folds select configurations in 2017–2018. Configurations are frozen before the 2019 test. Each fit/selection cutoff leaves a day for data from different timezones to arrive. The model stays fixed within each evaluation period, while prior actual check-ins become available for later one-day predictions. Separate sections cover 2020–2021 stress, both unresolved Yelp timestamp interpretations, and an extra day of reporting delay. The main selection metric is equal-fold mean city-level Poisson deviance; MAE, RMSE, per-city results, and paired block-bootstrap weather comparisons provide additional context.
+
+Observed target-day ERA5 is a retrospective input: its score does not demonstrate operational forecasting performance. Zero check-ins mean no recorded events, not confirmed store closure. These are activity predictions for the fixed city/category cohort, not customer, revenue, or exact-address predictions.
+
+Use **Restart Kernel and Run All**, or execute an output copy:
+
+```sh
+mkdir -p data/processed
+uv run --frozen --group notebooks jupyter nbconvert \
+  --to notebook --execute --ExecutePreprocessor.timeout=1800 \
+  --output-dir=data/processed notebooks/03_forecasting_model_comparison.ipynb
+```
+
+Each run creates `data/processed/forecast_comparison/<experiment-id>_<timestamp>/` with CSV scores/predictions/cohorts, PNG plots, a locally generated `models.joblib`, and `experiment_manifest.json`. The manifest records source hashes, configuration, selected models, package versions, timing, and limitations. A run becomes `complete` only after exports succeed; reruns leave previous bundles intact. Keep source notebook outputs empty and all generated artifacts local. Notebook libraries belong to the optional `notebooks` dependency group.

@@ -15,15 +15,20 @@ dev = [
     "ruff>=0.9,<1",
 ]
 notebooks = [
+    "catboost>=1.2,<2",
     "gdown>=5.2,<7",
     "ipykernel>=6.29,<8",
+    "joblib>=1.4,<2",
     "jupyterlab>=4.3,<5",
     "matplotlib>=3.9,<4",
     "nbclient>=0.10,<1",
     "nbconvert>=7.16,<8",
     "nbformat>=5.10,<6",
+    "numpy>=2,<3",
     "omfiles==1.2.0",
     "pandas>=2.2,<4",
+    "scikit-learn>=1.7,<2",
+    "threadpoolctl>=3.6,<4",
 ]
 
 [build-system]

@@ -1,6 +1,6 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and Yelp exploration notebook share a uv project. Application data ingestion, trained weather models, and location scoring are future work.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and dataset/forecasting notebooks share a uv project. Forecasting experiments run in notebooks; application data ingestion, model integration, and location scoring are future work.
 
 ## Project features
 
@@ -46,6 +46,12 @@ In VS Code, select `.venv/bin/python` as the notebook kernel. Notebook dependenc
 
 Open [the weather notebook](notebooks/02_yelp_weather_dataset_exploration.ipynb) to download ERA5 weather for every Yelp dataset location and explore daily/monthly summaries. Its **Download data** section prepares the mapping and reuses verified yearly files. All acquisition code lives in the notebook. See [the weather guide](docs/weather-data.md) for the local subset, provenance, schema, and timestamp alignment before joining weather to activity.
 
+See [the research plan](docs/research/sitesense-research-plan.md) for the dataset audit, recommended experimental scope, model selection, evaluation protocol, and demo architecture. The report is in Vietnamese and distinguishes measured dataset findings from proposed experiments.
+
+Open [the forecasting comparison notebook](notebooks/03_forecasting_model_comparison.ipynb) after preparing both datasets. It explains each step in simple Vietnamese and compares seasonal/recent-mean/zero baselines, Poisson regression, histogram gradient boosting, and CatBoost. The default experiment uses daily Restaurant check-ins in Philadelphia, Tampa, and Nashville: rolling validation in 2017–2018, a locked 2019 test, and a separate 2020–2021 stress test. It also checks timestamp assumptions and a one-day reporting delay. Weather variants use realized ERA5 and measure retrospective predictive value. They do not yet use weather forecasts available before the target day.
+
+Run all cells from the beginning. Each run saves metrics, predictions, plots, trained models, and a provenance manifest to a new local folder under `data/processed/forecast_comparison/`. See [data/README.md](data/README.md) for headless execution and the comparison protocol.
+
 ## Validation
 
 ```sh
@@ -68,9 +74,9 @@ compose.yaml            Local PostgreSQL service and persistent volume
 pyproject.toml          Application, development, and optional notebook dependencies
 uv.lock                 Shared Python dependency lockfile
 .streamlit/config.toml  Streamlit configuration and theme
-tests/                  Streamlit AppTest coverage
+tests/                  App, database, data preparation, and forecasting tests
 scripts/                Validation and server smoke checks
-notebooks/              Dataset download and initial experiments
+notebooks/              Dataset download, exploration, and forecasting comparison
 data/                   Local source and analysis artifacts
 ```
 
