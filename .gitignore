@@ -3,6 +3,7 @@ dist/
 
 # Python
 .venv/
+.tools/
 __pycache__/
 *.py[cod]
 *.egg-info/

@@ -1,45 +1,26 @@
-"""Render the local research workspace using native Streamlit components."""
+"""Multipage Streamlit app: shared sidebar filters and one module per page."""
 
 import streamlit as st
+
+from sitesense.components.sidebar import render_sidebar
+from sitesense.pages import activity, compare, forecast, ranking, weather
 
 
 def render_app() -> None:
     st.set_page_config(page_title="SiteSense AI", page_icon="🌦️", layout="wide")
-    st.title("SiteSense AI")
-    st.caption("Research workspace · Location. Weather. Activity.")
-    st.header("Weather-aware retail location intelligence.")
-    st.write(
-        "Explore how local weather relates to recorded check-in activity, "
-        "then use that evidence to evaluate potential retail locations."
-    )
-
-    with st.container(border=True):
-        st.subheader("Research readiness")
-        st.info("Not configured")
-        st.markdown("**Start with trustworthy data.**")
-        st.write(
-            "No check-in dataset, weather source, or trained model is connected yet. "
-            "Activity forecasts and location scores will appear after data is prepared "
-            "and models are evaluated."
-        )
-
-    st.divider()
-    st.subheader("The research path")
-    for column, number, title, description in zip(
-        st.columns(3),
-        ("01", "02", "03"),
-        ("Prepare the evidence", "Evaluate the models", "Explore the locations"),
-        (
-            "Align recorded check-ins, locations, and historical weather.",
-            "Compare baselines and measure performance on held-out data.",
-            "Present predictions with their assumptions and uncertainty.",
-        ),
-        strict=True,
-    ):
-        with column:
-            st.caption(number)
-            st.markdown(f"**{title}**")
-            st.write(description)
-    st.caption("Check-ins are an activity proxy. Weather scenarios do not prove causal effects.")
-    st.divider()
-    st.caption("SiteSense AI · Retail location intelligence research")
+    navigation = st.navigation(
+        [
+            st.Page(ranking.render, title="Site ranking", icon=":material/leaderboard:",
+                    url_path="ranking", default=True),
+            st.Page(activity.render, title="Customer activity", icon=":material/schedule:",
+                    url_path="activity"),
+            st.Page(weather.render, title="Weather impact", icon=":material/rainy:",
+                    url_path="weather"),
+            st.Page(forecast.render, title="Demand forecast", icon=":material/trending_up:",
+                    url_path="forecast"),
+            st.Page(compare.render, title="Compare sites", icon=":material/compare_arrows:",
+                    url_path="compare"),
+        ]
+    )  # fmt: skip
+    render_sidebar()
+    navigation.run()

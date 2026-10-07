@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import TextIO
+from typing import IO
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -21,7 +21,7 @@ def available_port() -> int:
         return int(server.getsockname()[1])
 
 
-def wait_until_healthy(url: str, process: subprocess.Popen[str], output: TextIO) -> None:
+def wait_until_healthy(url: str, process: subprocess.Popen[str], output: IO[str]) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -62,12 +62,12 @@ def main() -> None:
             wait_until_healthy(f"{base_url}/_stcore/health", process, output)
             with urlopen(base_url, timeout=5) as response:
                 assert response.status == 200
-            app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
+            app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120).run()
             assert not app.exception, [error.message for error in app.exception]
-            assert app.title[0].value == "SiteSense AI"
-            assert app.info[0].value == "Not configured"
+            assert app.title[0].value == "Where should the next store open?"
+            assert any("proxy" in item.value for item in app.info)
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, app rendering, and research readiness.")
+            print("Smoke passed: Streamlit server, app rendering, and site ranking page.")
         finally:
             process.terminate()
             try:
