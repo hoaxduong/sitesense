@@ -13,8 +13,8 @@ ASSOCIATION = (
     "weather causes the change."
 )
 FORECAST = (
-    "Forecasts are model estimates with a range. Weather scenarios show what the model "
-    "expects under different conditions; they do not prove causal effects."
+    "The typical year is a historical average with its range, not a forecast. Weather "
+    "scenarios apply measured associations; they do not prove causal effects."
 )
 YEARLY_USAGE = (
     "The number of people using Yelp check-ins changes from year to year. Compare areas "

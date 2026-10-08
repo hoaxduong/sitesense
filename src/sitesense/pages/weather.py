@@ -1,6 +1,6 @@
 """Page 3 · Weather impact: how does weather change activity? (Feature 3, US2)"""
 
-from dataclasses import dataclass
+from typing import Literal
 
 import pandas as pd
 import streamlit as st
@@ -10,36 +10,22 @@ from sitesense.components.notices import ASSOCIATION, page_header
 from sitesense.components.sidebar import current_filters
 
 ALL_AREAS = "__all__"
-
-
-@dataclass(frozen=True)
-class Event:
-    label: str
-    levels: dict[str, str]  # threshold_level -> label
-    default: str
-
-
-# Proposed definitions (decision #4, pending team confirmation).
-EVENTS = {
-    "heavy_rain": Event(
-        "Heavy rain",
-        {"moderate": "≥ 10 mm/day", "heavy": "≥ 20 mm/day", "very_heavy": "> wet-day p95"},
-        "heavy",
-    ),
-    "hot_day": Event(
-        "Hot day",
-        {"local_p90": "max temp > local p90", "fixed_35": "max temp ≥ 35 °C"},
-        "local_p90",
-    ),  # fmt: skip
-    "cold_day": Event(
-        "Cold day",
-        {"local_p10": "min temp < local p10", "ice_day": "max temp < 0 °C"},
-        "local_p10",
-    ),  # fmt: skip
-    "snowfall": Event(
-        "Snowfall", {"light": "≥ 2.5 cm (3.5 mm w.e.)", "heavy": "≥ 5 cm (7 mm w.e.)"}, "light"
-    ),
+EVENT_NAMES = {
+    "heavy_rain": "Heavy rain/snow",
+    "heat": "Heat",
+    "cold": "Cold",
+    "ice_day": "Ice day",
+    "snow": "Snow",
 }
+BadgeColor = Literal["green", "orange", "gray"]
+STATUS: dict[str, tuple[str, BadgeColor]] = {
+    "supported": ("Supported", "green"),
+    "partial": ("Partly supported", "orange"),
+    "not_supported": ("No clear effect", "gray"),
+    "insufficient": ("Too few days", "gray"),
+    "not_available": ("No official threshold", "gray"),
+}
+SHOWN = ("supported", "partial", "not_supported")
 
 
 def effect_row(
@@ -51,30 +37,46 @@ def effect_row(
     return None if rows.empty else rows.iloc[0]
 
 
+def default_level(thresholds: pd.DataFrame, effects: pd.DataFrame, event: str) -> str | None:
+    """The level to show by default: best-supported metro estimate, else the first available."""
+    levels = thresholds[(thresholds.event_type == event) & thresholds.available]
+    if levels.empty:
+        return None
+    metro = effects[effects.area_id.isna() & (effects.event_type == event)]
+    rank = {"supported": 0, "partial": 1, "not_supported": 2, "insufficient": 3}
+    records = metro.to_dict("records")
+    best = sorted(records, key=lambda r: (rank.get(str(r["status"]), 9), -int(r["n_events"])))
+    return str(best[0]["threshold_level"]) if best else str(levels.threshold_level.iloc[0])
+
+
 def _fmt_pct(value: float) -> str:
     return f"{value:+.1f}%".replace("-", "−")
 
 
 def _p_text(p_value: float) -> str:
-    return "p < 0.001" if p_value < 0.001 else f"p = {p_value:.3f}"
+    return "p < 0.001" if p_value < 0.002 else f"p = {p_value:.3f}"
 
 
-def _metrics(row: pd.Series, areas: pd.DataFrame, area_id: str | None) -> None:
+def _metrics(
+    row: pd.Series | None, threshold: pd.Series, areas: pd.DataFrame, area_id: str | None
+) -> None:
     columns = st.columns(4)
-    n = int(row.n_events)
-    columns[0].metric("Event days found", n, "days, 2015–2021", delta_color="off")
-    columns[1].metric(
-        "Change in check-ins",
-        _fmt_pct(row.effect_pct),
-        f"95% CI {_fmt_pct(row.ci_low)} to {_fmt_pct(row.ci_high)}",
-        delta_color="off",
-    )
-    if n < scoring.MIN_EVENTS:
-        verdict, note = "Hidden", f"fewer than {scoring.MIN_EVENTS} event days"
+    status = "not_available" if row is None else str(row.status)
+    text, color = STATUS[status]
+    if row is None or pd.isna(row.effect_pct):
+        columns[0].metric("Event days found", "—", "no estimate", delta_color="off")
+        columns[1].metric("Change in check-ins", "—", delta_color="off")
     else:
-        reliable = scoring.is_reliable(n, row.p_value)
-        verdict, note = ("Yes" if reliable else "No"), f"{_p_text(row.p_value)} · n = {n}"
-    columns[2].metric("Clear result?", verdict, note, delta_color="off")
+        columns[0].metric("Event days found", int(row.n_events), "usable days, 2015 – Feb 2020",
+                          delta_color="off")  # fmt: skip
+        ci = (f"95% CI {_fmt_pct(row.ci_low)} to {_fmt_pct(row.ci_high)}"
+              if pd.notna(row.ci_low) else "no interval (too few days)")  # fmt: skip
+        columns[1].metric("Change in check-ins", _fmt_pct(row.effect_pct), ci, delta_color="off")
+    with columns[2]:
+        st.caption("Verdict")
+        st.badge(text, color=color)
+        if row is not None and pd.notna(row.p_value):
+            st.caption(f"{_p_text(row.p_value)} · strict rule {_fmt_pct(row.effect_strict)}")
     scope = areas if area_id is None else areas[areas.area_id == area_id]
     columns[3].metric(
         "Distance to weather cell",
@@ -82,42 +84,63 @@ def _metrics(row: pd.Series, areas: pd.DataFrame, area_id: str | None) -> None:
         f"{scope.weather_cell_id.nunique()} ERA5 cell(s), 0.25° grid",
         delta_color="off",
     )
+    if threshold.days_per_year == threshold.days_per_year:
+        st.caption(
+            f"**Threshold:** {threshold.label} · source: "
+            f"[{threshold.office}]({threshold.source_url}) ({threshold.source_status})"
+            f" · about {threshold.days_per_year:.1f} days a year "
+            f"({threshold.share_of_days:.1%} of days, 2010–2021)."
+        )
 
 
-def _effects_by_type(effects: pd.DataFrame, area_id: str | None, chosen: dict[str, str]) -> None:
+def _effects_chart(effects: pd.DataFrame, thresholds: pd.DataFrame, area_id: str | None) -> None:
     rows, hidden = [], []
-    for key, event in EVENTS.items():
-        row = effect_row(effects, area_id, key, chosen.get(key, event.default))
-        if row is None:
+    for item in thresholds.itertuples():
+        row = effect_row(effects, area_id, str(item.event_type), str(item.threshold_level))
+        status = "not_available" if row is None else str(row.status)
+        if row is None or status not in SHOWN:
+            hidden.append(f"{item.label}: {STATUS[status][0].lower()}")
             continue
-        label = f"{event.label} ({event.levels[row.threshold_level]})"
-        if row.n_events < scoring.MIN_EVENTS:
-            hidden.append(f"{label}, n = {row.n_events}")
-            continue
-        rows.append({**row.to_dict(), "label": f"{label}\nn = {row.n_events}"})
+        rows.append(
+            {
+                **row.to_dict(),
+                "label": f"{item.label}\nn = {int(row.n_events)} · {STATUS[status][0]}",
+            }
+        )
     st.subheader("Effect by event type")
     st.caption("Bar = average change vs normal days · line = 95% confidence interval")
     if rows:
         st.pyplot(charts.effect_bars(pd.DataFrame(rows)))
     if hidden:
-        st.caption("Hidden (fewer than 20 event days): " + "; ".join(hidden))
+        with st.expander(f"Not shown ({len(hidden)})"):
+            st.markdown("\n".join(f"- {h}" for h in hidden))
 
 
-def _sensitivity_table(effects: pd.DataFrame, areas: pd.DataFrame) -> None:
+def _sensitivity_table(
+    effects: pd.DataFrame, thresholds: pd.DataFrame, areas: pd.DataFrame
+) -> None:
     st.subheader("Weather sensitivity by area")
+    events = [
+        (e, lvl) for e in thresholds.event_type.drop_duplicates()
+        if (lvl := default_level(thresholds, effects, str(e))) is not None
+    ]  # fmt: skip
     records = []
     for area in areas.itertuples():
         record: dict[str, object] = {"Area": f"{area.name} · {area.area_id}"}
         heavy = None
-        for key, event in EVENTS.items():
-            row = effect_row(effects, str(area.area_id), key, event.default)
-            if row is None or row.n_events < scoring.MIN_EVENTS:
-                record[event.label] = "—"
+        for event, level in events:
+            row = effect_row(effects, str(area.area_id), str(event), level)
+            name = EVENT_NAMES.get(str(event), str(event))
+            if (
+                row is None
+                or row.status in ("insufficient", "not_available")
+                or pd.isna(row.effect_pct)
+            ):
+                record[name] = "—"
                 continue
             text = f"{row.effect_pct:+.0f}%".replace("-", "−")
-            clear = row.ci_low > 0 or row.ci_high < 0
-            record[event.label] = text if clear else f"({text})"
-            if key == "heavy_rain":
+            record[name] = text if row.status in ("supported", "partial") else f"({text})"
+            if event == "heavy_rain":
                 heavy = float(row.effect_pct)
         record["Sensitivity"] = "—" if heavy is None else scoring.sensitivity_label(heavy)
         record["Weather cell"] = area.weather_cell_id
@@ -125,10 +148,10 @@ def _sensitivity_table(effects: pd.DataFrame, areas: pd.DataFrame) -> None:
         records.append(record)
     st.dataframe(pd.DataFrame(records), hide_index=True, width="stretch")
     st.caption(
-        "Default thresholds per event. Values in brackets have a 95% CI that includes zero. "
-        "Most areas share the same weather grid cell, so differences between areas come from "
-        "customer behaviour, not from different weather. Per-area intervals are wide because "
-        "each area has few check-ins per day."
+        "Each column uses the best-supported threshold of that event type. Values in brackets "
+        "have a 95% CI that includes zero; “—” means too few event days. Most areas share one "
+        "weather grid cell, so differences between areas reflect customer behaviour, not "
+        "different weather."
     )
 
 
@@ -136,84 +159,86 @@ def render() -> None:
     filters = current_filters()
     page_header(
         "How does weather change activity?",
-        "Check-ins on bad-weather days compared with similar normal days "
-        "(same weekday, ± 4 weeks, excluding other event days).",
+        "Check-ins on days that meet official weather thresholds, compared with the same "
+        "weekday in the surrounding weeks.",
         ASSOCIATION,
     )
-    areas = queries.areas(filters.metro)
-    effects = queries.weather_effects(filters.metro, filters.categories)
+    areas = queries.areas(filters.metro, filters.category)
+    effects = queries.weather_effects(filters.metro, filters.category)
+    thresholds = queries.weather_thresholds(filters.metro)
+    available = thresholds[thresholds.available]
+    if available.empty:
+        st.warning("No weather thresholds are published for this city.")
+        st.stop()
 
     controls = st.columns(3)
-    event_key = controls[0].selectbox(
-        "Weather event", list(EVENTS), format_func=lambda key: EVENTS[key].label
+    event_types = list(available.event_type.drop_duplicates())
+    event = controls[0].selectbox(
+        "Weather event", event_types, format_func=lambda e: EVENT_NAMES.get(e, e)
     )
-    event = EVENTS[event_key]
-    level = controls[1].select_slider(
+    levels = available[available.event_type == event]
+    labels = dict(zip(levels.threshold_level, levels.label, strict=True))
+    preferred = default_level(thresholds, effects, event) or list(labels)[0]
+    level = controls[1].selectbox(
         "Threshold",
-        options=list(event.levels),
-        value=event.default,
-        format_func=event.levels.__getitem__,
-        key=f"level_{event_key}",
+        list(labels),
+        index=list(labels).index(preferred),
+        format_func=labels.__getitem__,
+        key=f"level_{event}",
     )
     names = {ALL_AREAS: "All candidate areas"} | {
         str(a.area_id): f"{a.name} ({a.area_id})" for a in areas.itertuples()
     }
     choice = controls[2].selectbox("Area", list(names), format_func=names.__getitem__)
     area_id = None if choice == ALL_AREAS else choice
-    if event_key == "snowfall":
-        st.caption(
-            "Snowfall is not in the current weather download yet; the team still has to add "
-            "it or drop snow from the MVP."
-        )
 
-    row = effect_row(effects, area_id, event_key, level)
-    if row is None:
-        st.warning("No estimate for this event, threshold and area.")
-        st.stop()
-    _metrics(row, areas, area_id)
+    threshold = levels[levels.threshold_level == level].iloc[0]
+    row = effect_row(effects, area_id, event, level)
+    _metrics(row, threshold, areas, area_id)
 
     left, right = st.columns(2, gap="large")
     with left:
-        _effects_by_type(effects, area_id, {event_key: level})
+        _effects_chart(effects, thresholds, area_id)
     with right:
         st.subheader("Temperature vs activity")
         st.caption("Each dot = one week (whole metro) · fitted quadratic trend")
-        st.pyplot(
-            charts.anomaly_scatter(queries.anomaly_response(filters.metro, filters.categories))
-        )
+        st.pyplot(charts.anomaly_scatter(queries.anomaly_response(filters.metro, filters.category)))
 
     where = "across all candidate areas" if area_id is None else f"in {names[choice]}"
-    if row.n_events < scoring.MIN_EVENTS:
+    status = "not_available" if row is None else str(row.status)
+    if status in ("supported", "partial") and row is not None:
         meaning = (
-            f"There are only {row.n_events} {event.label.lower()} days at this threshold, "
-            f"fewer than {scoring.MIN_EVENTS}, so no estimate is shown in the comparison."
+            f"On days that meet this threshold, {filters.category} check-ins {where} change by "
+            f"about {_fmt_pct(row.effect_pct)} compared with similar normal days (95% CI "
+            f"{_fmt_pct(row.ci_low)} to {_fmt_pct(row.ci_high)})."
         )
-    elif scoring.is_reliable(int(row.n_events), row.p_value):
+        if status == "partial":
+            meaning += " The stricter baseline rule disagrees, so treat the size as uncertain."
+    elif status == "not_supported" and row is not None:
+        meaning = f"No clear change in check-ins {where} on these days (the 95% CI includes zero)."
+    elif status == "insufficient" and row is not None:
         meaning = (
-            f"On {event.label.lower()} days ({event.levels[level]}), check-ins {where} change "
-            f"by about {_fmt_pct(row.effect_pct)} compared with similar normal days "
-            f"(95% CI {_fmt_pct(row.ci_low)} to {_fmt_pct(row.ci_high)})."
+            f"Only {int(row.n_events)} usable event days in 2015 – Feb 2020, fewer than "
+            f"{scoring.MIN_EVENTS}: the threshold is defined, but too rare to measure here."
         )
     else:
-        meaning = (
-            f"On {event.label.lower()} days ({event.levels[level]}), there is no clear change "
-            f"in check-ins {where}: the 95% CI runs from {_fmt_pct(row.ci_low)} to "
-            f"{_fmt_pct(row.ci_high)}."
-        )
+        meaning = "There is no official threshold for this event in this city."
     st.info(f"**What this means:** {meaning}", icon=":material/lightbulb:")
 
-    _sensitivity_table(effects, areas)
+    _sensitivity_table(effects, thresholds, areas)
     with st.expander("How this is calculated"):
         st.markdown(
-            "1. Each business is matched to its nearest ERA5 grid cell (0.25°, about 25 km); "
-            "areas inherit the cell of their businesses.\n"
-            "2. Daily weather is built in local time: precipitation is the sum of the hours, "
-            "max/min/mean temperature come from hourly values. Percentile thresholds are per "
-            "grid cell, using a ± 2-day calendar window (ETCCDI style).\n"
-            "3. A day is an **event day** when it passes the chosen threshold. Thresholds are "
-            "proposed and still need team confirmation.\n"
-            "4. Event-day check-ins are compared with the same weekday in the ± 4 weeks "
-            "around it, excluding other event days. Events with fewer than 20 days are hidden.\n"
-            "5. The result is an association with a 95% confidence interval, not a causal "
-            "effect."
+            "1. Thresholds come from the city's NWS forecast office or city government "
+            "(see the source link above) and the WMO/ETCCDI rain indices; file "
+            "`config/weather_thresholds.csv`.\n"
+            "2. Daily weather is built in local time from hourly ERA5 data for the area's grid "
+            "cell (0.25°, about 25 km). Heat index and wind chill follow the NWS formulas. "
+            "Snowfall uses ERA5 snowfall water equivalent × 0.7 (cm).\n"
+            "3. Each event day is compared with the same weekday in the ± 4 surrounding weeks. "
+            "US federal holidays are excluded from both. Baseline days exclude other days of the "
+            "same event type; the strict rule excludes days of any event type.\n"
+            "4. Verdicts: *supported* = at least 20 days and the 95% CI excludes zero under both "
+            "rules; *partly supported* = only the first rule; *too few days* = under 20.\n"
+            "5. Results are associations, not causal effects. Check-in times are treated as UTC "
+            "(pending team decision D7)."
         )

@@ -1,0 +1,44 @@
+city,state,yelp_businesses,office,event,level,variable,operator,value,unit,condition_note,status,source_url
+ALL,,,WMO/ETCCDI,heavy_rain,moderate,precipitation_daily,>=,10,mm,R10mm,universal,https://etccdi.pacificclimate.org/list_27_indices.shtml
+ALL,,,WMO/ETCCDI,heavy_rain,heavy,precipitation_daily,>=,20,mm,R20mm,universal,https://etccdi.pacificclimate.org/list_27_indices.shtml
+ALL,,,WMO/ETCCDI,heavy_rain,very_heavy,precipitation_daily,>,p95_wet_days,mm,R95p (wet day >= 1 mm),universal,https://etccdi.pacificclimate.org/list_27_indices.shtml
+ALL,,,WMO/ETCCDI,ice_day,ice_day,tmax_daily,<,0,C,ID,universal,https://etccdi.pacificclimate.org/list_27_indices.shtml
+Philadelphia,PA,14567,NWS Mount Holly (PHI),heat,advisory,heat_index,>=,96,F,"96-104 F for 2 consecutive hours through Jun 30; 100-104 F from Jul 1",verified,https://www.weather.gov/phi/criteria
+Philadelphia,PA,14567,NWS Mount Holly (PHI),heat,warning,heat_index,>=,105,F,2 consecutive hours,verified,https://www.weather.gov/phi/criteria
+Philadelphia,PA,14567,NWS Mount Holly (PHI),cold,advisory,wind_chill_or_temp,<=,0,F,0 to -9 F,verified,https://www.weather.gov/phi/criteria-winter
+Philadelphia,PA,14567,NWS Mount Holly (PHI),cold,warning,wind_chill_or_temp,<=,-10,F,,verified,https://www.weather.gov/phi/criteria-winter
+Philadelphia,PA,14567,NWS Mount Holly (PHI),snow,advisory,snowfall,>=,2,in,in 12 hours,verified,https://www.weather.gov/phi/criteria-winter
+Philadelphia,PA,14567,NWS Mount Holly (PHI),snow,warning,snowfall,>=,5,in,in one event,verified,https://www.weather.gov/phi/criteria-winter
+Philadelphia,PA,14567,City of Philadelphia,cold,code_blue,wind_chill,<=,20,F,"or precipitation with temperature <= 32 F",verified,https://www.phila.gov/codeBlue.html
+Tampa,FL,9048,NWS Tampa Bay (TBW),heat,advisory,heat_index,>=,108,F,108-112 F,verified,https://www.weather.gov/tbw/hotdss
+Tampa,FL,9048,NWS Tampa Bay (TBW),heat,warning,heat_index,>=,113,F,,verified,https://www.weather.gov/tbw/hotdss
+Tampa,FL,9048,NWS Tampa Bay (TBW),cold,advisory,,,,,criteria not found,not_found,
+Nashville,TN,6968,NWS Nashville (OHX),heat,advisory,heat_index,>=,105,F,"around 105 F and min >= 75 F for 1-2 days",older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Nashville,TN,6968,NWS Nashville (OHX),heat,warning,heat_index,>=,110,F,or air temperature >= 105 F,older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Nashville,TN,6968,NWS Nashville (OHX),cold,advisory,wind_chill,<,0,F,for 1 hour or more (pre-2024 Wind Chill Advisory),older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Nashville,TN,6968,NWS Nashville (OHX),cold,warning,wind_chill,<=,-10,F,for 1 hour or more (pre-2024 Wind Chill Warning),older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Nashville,TN,6968,NWS Nashville (OHX),snow,advisory,snowfall,>=,1,in,"1 to <3 in in 12 h, or 3 to <5 in in 24 h",older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Nashville,TN,6968,NWS Nashville (OHX),snow,warning,snowfall,>=,3,in,"in 12 h, or >= 5 in in 24 h",older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Indianapolis,IN,7540,NWS Indianapolis (IND),heat,advisory,heat_index,>=,105,F,,verified,https://www.weather.gov/ind/criteria
+Indianapolis,IN,7540,NWS Indianapolis (IND),heat,warning,heat_index,>=,110,F,,verified,https://www.weather.gov/ind/criteria
+Indianapolis,IN,7540,NWS Indianapolis (IND),cold,advisory,wind_chill_or_temp,<=,-10,F,-10 to -19 F,verified,https://www.weather.gov/ind/criteria
+Indianapolis,IN,7540,NWS Indianapolis (IND),cold,warning,wind_chill_or_temp,<=,-20,F,,verified,https://www.weather.gov/ind/criteria
+Indianapolis,IN,7540,NWS Indianapolis (IND),snow,advisory,snowfall,>=,3,in,"3-4 in in 12 h (2-4 in optional), Central Indiana",verified,https://www.weather.gov/ind/criteria
+Indianapolis,IN,7540,NWS Indianapolis (IND),snow,warning,snowfall,>=,5,in,"in one event (<= 48 h), Central Indiana",verified,https://www.weather.gov/ind/criteria
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),heat,advisory,heat_index,>=,108,F,or temperature >= 103 F,verified,https://www.weather.gov/lix/wwa_criteria
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),heat,warning,heat_index,>=,113,F,or temperature >= 105 F,verified,https://www.weather.gov/lix/wwa_criteria
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),cold,advisory,wind_chill_or_temp,<,25,F,south of I-10/12 (New Orleans by geography),verified,https://www.weather.gov/lix/ColdWeatherChange2024
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),cold,warning,wind_chill_or_temp,<,15,F,south of I-10/12,verified,https://www.weather.gov/lix/ColdWeatherChange2024
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),cold,freeze_warning,temperature,<=,32,F,any freeze south of I-10/12,verified,https://www.weather.gov/lix/wwa_criteria
+New Orleans,LA,6208,NWS New Orleans/Baton Rouge (LIX),snow,warning,snowfall,>=,2,in,heavy snow per event,verified,https://www.weather.gov/lix/wwa_criteria
+Saint Louis,MO,4827,NWS St. Louis (LSX),heat,advisory,heat_index,>=,105,F,"around 105 F, or 100-104 F for >= 4 consecutive days",older_names,https://www.weather.gov/lsx/excessiveheatbriefing
+Saint Louis,MO,4827,NWS St. Louis (LSX),heat,warning,heat_index,>=,110,F,"around 110 F for 2 days, or around 105 F for 4 days",older_names,https://www.weather.gov/lsx/excessiveheatbriefing
+Saint Louis,MO,4827,NWS St. Louis (LSX),cold,advisory,wind_chill,<=,-15,F,-15 to -24 F (pre-2024 Wind Chill Advisory),older_names,https://weather.gov/lsx/windchillbriefing
+Saint Louis,MO,4827,NWS St. Louis (LSX),cold,warning,wind_chill,<=,-25,F,(pre-2024 Wind Chill Warning),older_names,https://weather.gov/lsx/windchillbriefing
+Saint Louis,MO,4827,NWS St. Louis (LSX),snow,advisory,snowfall,>=,3,in,3-5 in in 12 h,older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Saint Louis,MO,4827,NWS St. Louis (LSX),snow,warning,snowfall,>=,6,in,,older_sheet,https://www.weather.gov/media/pah/WeatherEducation/NWS%20CRITERIA.pdf
+Tucson,AZ,9249,NWS Tucson (TWC),heat,warning,heatrisk_level,>=,3,level,"Major/Extreme HeatRisk; method confirmed for NWS Phoenix, inferred for Tucson",inferred,https://www.weather.gov/psr/Heat
+Reno,NV,5932,NWS Reno (REV),all,,,,,,no criteria page found,not_found,
+Santa Barbara,CA,3829,NWS Los Angeles/Oxnard (LOX),all,,,,,,no criteria page found,not_found,
+Boise,ID,2937,NWS Boise (BOI),all,,,,,,no criteria page found,not_found,
+Edmonton,AB,5054,Environment and Climate Change Canada,all,,,,,,impact-based guides; no numeric cut-offs published,not_found,https://www.canada.ca/en/services/environment/weather/severeweather/weather-alerts/weather-impact-guides.html

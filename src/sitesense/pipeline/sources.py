@@ -1,38 +1,20 @@
-"""Readers for the locally staged Yelp files and ERA5 weather partitions."""
+"""Readers for the locally staged Yelp files and the ERA5 weather partitions."""
 
 import csv
 import gzip
+import hashlib
 import json
+import shutil
 import tarfile
 import zipfile
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import IO
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[3]
-RAW_DIR = ROOT / "data/raw/yelp_exploration"
-ARCHIVE = ROOT / "data/raw/Yelp-JSON.zip"
-WEATHER_DIR = ROOT / "data/processed/yelp_weather"
-INTERIM_DIR = ROOT / "data/interim"
-
-
-@dataclass(frozen=True)
-class Scope:
-    city: str
-    state: str
-    category: str
-
-    @property
-    def metro(self) -> str:
-        return f"{self.city}, {self.state}"
-
-    @property
-    def slug(self) -> str:
-        text = f"{self.city}_{self.state}_{self.category}".lower()
-        return "".join(ch if ch.isalnum() else "_" for ch in text)
+from sitesense.pipeline import config
+from sitesense.pipeline.config import City
 
 
 def _json_lines(path: Path) -> Iterator[dict[str, object]]:
@@ -42,100 +24,144 @@ def _json_lines(path: Path) -> Iterator[dict[str, object]]:
                 yield json.loads(line)
 
 
-def businesses(scope: Scope, raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """Businesses in the city/state whose categories include the category."""
+def businesses(cities: Iterable[City], raw_dir: Path = config.RAW_DIR) -> pd.DataFrame:
+    """Businesses in the given cities with a list of their category labels."""
+    wanted = {(c.name.lower(), c.state): c.metro for c in cities}
     rows = []
     for record in _json_lines(raw_dir / "business.jsonl"):
-        city = str(record.get("city") or "").strip().lower()
-        categories = [c.strip() for c in str(record.get("categories") or "").split(",")]
-        if city == scope.city.lower() and record.get("state") == scope.state:
-            if scope.category in categories:
-                rows.append(
-                    {
-                        key: record.get(key)
-                        for key in (
-                            "business_id", "name", "postal_code", "latitude", "longitude",
-                            "stars", "review_count", "is_open",
-                        )
-                    }  # fmt: skip
-                )
-    table = pd.DataFrame(rows)
-    table["postal_code"] = table.postal_code.fillna("").astype(str).str.strip()
-    return table
+        key = (str(record.get("city") or "").strip().lower(), str(record.get("state") or ""))
+        if key in wanted:
+            labels = [c.strip() for c in str(record.get("categories") or "").split(",")]
+            rows.append(
+                {
+                    "business_id": record["business_id"],
+                    "metro": wanted[key],
+                    "name": record.get("name"),
+                    "postal_code": str(record.get("postal_code") or "").strip(),
+                    "latitude": record.get("latitude"),
+                    "longitude": record.get("longitude"),
+                    "stars": record.get("stars"),
+                    "review_count": record.get("review_count"),
+                    "is_open": record.get("is_open"),
+                    "categories": [label for label in labels if label],
+                }
+            )
+    return pd.DataFrame(rows)
 
 
-def checkins(business_ids: set[str], raw_dir: Path = RAW_DIR) -> pd.DataFrame:
-    """One row per check-in timestamp (naive, as in the source) for the given businesses."""
-    rows: list[tuple[str, str]] = []
+def checkins(business_ids: set[str], raw_dir: Path = config.RAW_DIR) -> pd.DataFrame:
+    """One row per check-in timestamp (naive, as in the source)."""
+    ids, stamps = [], []
     for record in _json_lines(raw_dir / "checkin.jsonl"):
         business_id = str(record["business_id"])
         if business_id in business_ids:
-            rows += [(business_id, ts.strip()) for ts in str(record["date"]).split(",")]
-    table = pd.DataFrame(rows, columns=["business_id", "timestamp"])
+            parts = str(record["date"]).split(",")
+            ids += [business_id] * len(parts)
+            stamps += [part.strip() for part in parts]
+    table = pd.DataFrame({"business_id": ids, "timestamp": stamps})
     table["timestamp"] = pd.to_datetime(table.timestamp, format="%Y-%m-%d %H:%M:%S")
     return table
 
 
-def _review_member(archive: zipfile.ZipFile) -> Iterator[IO[bytes]]:
+def _table_of(name: str, tables: set[str]) -> str | None:
+    base = Path(name).name.lower()
+    for table in tables:
+        if base in {f"yelp_academic_dataset_{table}.json", f"{table}.json", f"{table}.jsonl"}:
+            return table
+    return None
+
+
+def _archive_streams(archive: zipfile.ZipFile, tables: set[str]) -> Iterator[tuple[str, IO[bytes]]]:
+    """Yield (table, stream) for the wanted Yelp tables, inside the ZIP or its nested TAR."""
     names = [m for m in archive.namelist() if not m.startswith("__MACOSX/")]
-    direct = [n for n in names if Path(n).name.lower().endswith("review.json")]
+    direct = [(n, t) for n in names if (t := _table_of(n, tables))]
     if direct:
-        with archive.open(direct[0]) as stream:
-            yield stream
+        for name, table in direct:
+            with archive.open(name) as stream:
+                yield table, stream
         return
     nested = [n for n in names if n.lower().endswith((".tar", ".tar.gz", ".tgz"))]
     if len(nested) != 1:
-        raise ValueError("Expected review JSON or one nested TAR in the Yelp archive.")
+        raise ValueError("Expected Yelp JSON files or one nested TAR in the archive.")
+    remaining = set(tables)
     with archive.open(nested[0]) as binary, tarfile.open(fileobj=binary, mode="r|*") as inner:
         for member in inner:
-            if member.isfile() and Path(member.name).name.lower().endswith("review.json"):
-                stream = inner.extractfile(member)
-                if stream is None:
-                    break
-                yield stream
+            found = _table_of(member.name, remaining) if member.isfile() else None
+            if found is None:
+                continue
+            extracted = inner.extractfile(member)
+            if extracted is not None:
+                yield found, extracted
+            remaining.discard(found)
+            if not remaining:
                 return
-    raise ValueError("No review JSON found in the Yelp archive.")
 
 
-def reviews(scope: Scope, business_ids: set[str], archive_path: Path = ARCHIVE) -> pd.DataFrame:
-    """business_id, stars and date of every review for the given businesses.
+def stage_from_archive(archive_path: Path = config.ARCHIVE, raw_dir: Path = config.RAW_DIR) -> None:
+    """Write business.jsonl and checkin.jsonl from the Yelp ZIP (as notebook 01 does)."""
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive_path) as archive:
+        for table, stream in _archive_streams(archive, {"business", "checkin"}):
+            partial = raw_dir / f"{table}.jsonl.partial"
+            with partial.open("wb") as out:
+                shutil.copyfileobj(stream, out, length=8 * 1024**2)
+            partial.replace(raw_dir / f"{table}.jsonl")
+            print(f"  staged {table}.jsonl", flush=True)
 
-    Streams the full review table out of the archive once and caches the small result
-    under data/interim/ (text and user fields are never kept).
+
+def reviews(business_ids: set[str], archive_path: Path = config.ARCHIVE) -> pd.DataFrame:
+    """business_id, stars and date for every review of the given businesses.
+
+    Streams the full review table once per business set and caches only these three fields
+    under data/interim/ (review text and user fields are never kept). Without the Yelp ZIP
+    and without a cache, returns no reviews: category trends are then left empty.
     """
-    cache = INTERIM_DIR / f"reviews_{scope.slug}.csv.gz"
+    key = hashlib.sha256("\n".join(sorted(business_ids)).encode()).hexdigest()[:12]
+    cache = config.INTERIM_DIR / f"reviews_{key}.csv.gz"
     if not cache.is_file():
-        INTERIM_DIR.mkdir(parents=True, exist_ok=True)
+        if not archive_path.is_file():
+            print(f"  no {archive_path.name}: review-based category trends are skipped", flush=True)
+            return pd.DataFrame(
+                {"business_id": pd.Series(dtype=str), "stars": pd.Series(dtype=float),
+                 "date": pd.Series(dtype="datetime64[ns]")}
+            )  # fmt: skip
+        config.INTERIM_DIR.mkdir(parents=True, exist_ok=True)
         partial = cache.with_suffix(".partial")
         with zipfile.ZipFile(archive_path) as archive, gzip.open(partial, "wt", newline="") as out:
             writer = csv.writer(out)
             writer.writerow(["business_id", "stars", "date"])
-            for stream in _review_member(archive):
+            for _, stream in _archive_streams(archive, {"review"}):
                 for line in stream:
-                    if b'"business_id"' not in line:
-                        continue
                     record = json.loads(line)
                     if record["business_id"] in business_ids:
                         writer.writerow([record["business_id"], record["stars"], record["date"]])
         partial.replace(cache)
-    table = pd.read_csv(cache, parse_dates=["date"])
-    return table[table.business_id.isin(business_ids)].reset_index(drop=True)
+    return pd.read_csv(cache, parse_dates=["date"])
 
 
-def weather_mapping(business_ids: set[str], weather_dir: Path = WEATHER_DIR) -> pd.DataFrame:
-    mapping = pd.read_csv(weather_dir / "business_weather_mapping.csv")
+def weather_mapping(business_ids: set[str]) -> pd.DataFrame:
+    mapping = pd.read_csv(config.WEATHER_DIR / "business_weather_mapping.csv")
     return mapping[mapping.business_id.isin(business_ids)].reset_index(drop=True)
 
 
-def hourly_weather(cells: set[str], weather_dir: Path = WEATHER_DIR) -> pd.DataFrame:
-    """Hourly UTC weather for the given grid cells across every yearly partition."""
-    manifest = json.loads((weather_dir / "acquisition.json").read_text())
+def _read_partitions(directory: Path, cells: set[str]) -> pd.DataFrame:
+    manifest = json.loads((directory / "acquisition.json").read_text())
     if manifest.get("status") != "complete":
-        raise ValueError("The weather acquisition is incomplete; rerun notebook 02 first.")
+        raise ValueError(f"Weather acquisition in {directory} is incomplete.")
     frames = []
-    for path in sorted((weather_dir / "hourly").glob("era5_*.csv.gz")):
+    for path in sorted((directory / "hourly").glob("*.csv.gz")):
         for chunk in pd.read_csv(path, chunksize=500_000):
             frames.append(chunk[chunk.weather_cell_id.isin(cells)])
-    table = pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True)
+
+
+def hourly_weather(cells: set[str]) -> pd.DataFrame:
+    """Hourly UTC weather for the cells, with snowfall water equivalent when downloaded."""
+    table = _read_partitions(config.WEATHER_DIR, cells)
+    if (config.SNOW_DIR / "acquisition.json").is_file():
+        snow = _read_partitions(config.SNOW_DIR, cells)
+        table = table.merge(snow, on=["weather_cell_id", "timestamp_utc"], how="left")
+    else:
+        table["snowfall_water_equivalent"] = float("nan")
     table["timestamp_utc"] = pd.to_datetime(table.timestamp_utc, utc=True)
-    return table
+    return table.sort_values(["weather_cell_id", "timestamp_utc"]).reset_index(drop=True)

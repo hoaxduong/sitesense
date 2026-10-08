@@ -52,7 +52,7 @@ def test_connect_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_packaged_migration_checksums_match_contents() -> None:
     migrations = database._load_migrations()
-    assert [migration.version for migration in migrations] == ["001_datasets"]
+    assert [migration.version for migration in migrations] == ["001_datasets", "003_serving"]
     assert migrations[0].checksum == hashlib.sha256(migrations[0].sql.encode()).hexdigest()
 
 
@@ -122,12 +122,12 @@ def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_migrations_are_idempotent_and_status_is_read_only(isolated_database: None) -> None:
-    assert database.status() == [("001_datasets", False)]
+    assert database.status() == [("001_datasets", False), ("003_serving", False)]
     with database.connect() as connection:
         assert connection.execute("SELECT to_regnamespace('sitesense')").fetchone() == (None,)
-    assert database.migrate() == ["001_datasets"]
+    assert database.migrate() == ["001_datasets", "003_serving"]
     assert database.migrate() == []
-    assert database.status() == [("001_datasets", True)]
+    assert database.status() == [("001_datasets", True), ("003_serving", True)]
     with database.connect() as connection:
         row = connection.execute(
             """INSERT INTO sitesense.datasets (name, source_uri, version)
@@ -189,7 +189,7 @@ def test_an_earlier_migration_cannot_be_inserted_after_later_versions_are_applie
     migrations = database._load_migrations()
     migrations.append(database._Migration("003_later", "SELECT 1", "later-checksum"))
     monkeypatch.setattr(database, "_load_migrations", lambda: migrations)
-    assert database.migrate() == ["001_datasets", "003_later"]
+    assert database.migrate() == ["001_datasets", "003_serving", "003_later"]
     migrations.insert(
         1,
         database._Migration(

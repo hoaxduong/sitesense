@@ -13,28 +13,33 @@ DEFAULT_RANGE = (date(2015, 1, 1), date(2021, 12, 31))
 @dataclass(frozen=True)
 class Filters:
     metro: str
-    categories: tuple[str, ...]
+    category: str
     start: date
     end: date
 
+    @property
+    def years(self) -> range:
+        return range(self.start.year, self.end.year + 1)
+
 
 def render_sidebar() -> None:
+    first, last = queries.data_window()
     with st.sidebar:
         st.caption("FILTERS · ALL PAGES")
-        st.selectbox("Metro area", queries.METROS, key="metro")
-        st.multiselect(
+        metro = st.selectbox("Metro area", queries.metros(), key="metro")
+        st.selectbox(
             "Business category",
-            queries.CATEGORIES,
-            default=list(queries.CATEGORIES),
-            key="categories",
+            queries.categories(str(metro)),
+            key="category",
+            help="Categories are listed by number of businesses in the selected city.",
         )
         st.date_input(
             "Date range",
-            value=DEFAULT_RANGE,
-            min_value=queries.DATA_START,
-            max_value=queries.DATA_END,
+            value=(max(DEFAULT_RANGE[0], first), min(DEFAULT_RANGE[1], last)),
+            min_value=first,
+            max_value=last,
             key="date_range",
-            help="Applies to activity charts. Scores, weather effects and forecasts use "
+            help="Applies to activity charts. Scores, weather effects and the typical year use "
             "their own precomputed study periods.",
         )
         st.divider()
@@ -46,13 +51,16 @@ def render_sidebar() -> None:
 
 def current_filters() -> Filters:
     """Read the sidebar values; stop the page with a message when they are unusable."""
-    metro = st.session_state.get("metro", queries.METROS[0])
-    categories = tuple(st.session_state.get("categories", queries.CATEGORIES))
-    selected = st.session_state.get("date_range", DEFAULT_RANGE)
-    if not categories:
-        st.warning("Select at least one business category in the sidebar.")
+    metro = st.session_state.get("metro") or queries.metros()[0]
+    options = queries.categories(metro)
+    category = st.session_state.get("category")
+    if not options:
+        st.warning("No published data for this city yet.")
         st.stop()
+    if category not in options:
+        category = options[0]
+    selected = st.session_state.get("date_range", DEFAULT_RANGE)
     if len(selected) != 2:
         st.info("Pick an end date for the date range in the sidebar.")
         st.stop()
-    return Filters(metro, categories, selected[0], selected[1])
+    return Filters(metro, category, selected[0], selected[1])

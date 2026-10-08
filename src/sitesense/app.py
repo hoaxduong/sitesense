@@ -16,7 +16,7 @@ def render_app() -> None:
                     url_path="activity"),
             st.Page(weather.render, title="Weather impact", icon=":material/rainy:",
                     url_path="weather"),
-            st.Page(forecast.render, title="Demand forecast", icon=":material/trending_up:",
+            st.Page(forecast.render, title="Typical year", icon=":material/trending_up:",
                     url_path="forecast"),
             st.Page(compare.render, title="Compare sites", icon=":material/compare_arrows:",
                     url_path="compare"),

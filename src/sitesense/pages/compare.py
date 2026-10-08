@@ -9,6 +9,10 @@ from sitesense.components.sidebar import current_filters
 from sitesense.pages.ranking import ranked_areas
 
 
+def _share_text(value: float) -> str:
+    return "—" if value != value else f"{value:+.0%}".replace("-", "−")
+
+
 def _badges(cards: pd.DataFrame) -> dict[str, str]:
     badges: dict[str, str] = {}
     for column, label in (
@@ -22,10 +26,20 @@ def _badges(cards: pd.DataFrame) -> dict[str, str]:
 
 
 def _review_trend(trends: pd.DataFrame, area_id: str) -> tuple[float, int, float, int, int]:
+    """Share change, new shops, latest stars, first and last year (NaN when no reviews)."""
     rows = trends[trends.area_id == area_id].sort_values("year")
+    if rows.empty or float(rows.review_count.sum()) == 0:
+        return float("nan"), int(rows.new_businesses.sum()), float("nan"), 2017, 2021
     first, last = rows.iloc[0], rows.iloc[-1]
-    change = float(last.review_share / first.review_share - 1)
-    return change, int(rows.new_businesses.sum()), float(last.avg_stars), first.year, last.year
+    first_share = float(first.review_share)
+    change = float(last.review_share) / first_share - 1 if first_share > 0 else float("nan")
+    return (
+        change,
+        int(rows.new_businesses.sum()),
+        float(last.avg_stars),
+        int(first.year),
+        int(last.year),
+    )
 
 
 def _card(row: pd.Series, badge: str | None, trend: float, peak: str) -> None:
@@ -41,7 +55,7 @@ def _card(row: pd.Series, badge: str | None, trend: float, peak: str) -> None:
             "Share trend (2019)": f"{row.growth_yoy:+.0%}".replace("-", "−"),
             "Peak season": peak,
             "Weather sensitivity": row.sensitivity,
-            "Category trend (reviews)": f"{trend:+.0%}".replace("-", "−"),
+            "Category trend (reviews)": _share_text(trend),
             "Competitors in 1 km": f"{row.competitor_count}",
         }
         st.markdown("\n".join(f"- {label}: **{value}**" for label, value in facts.items()))
@@ -55,7 +69,7 @@ def render() -> None:
         "trends side by side. Scores use the weights from the Site ranking page.",
         PROXY,
     )
-    table = ranked_areas(filters.metro, filters.categories)
+    table = ranked_areas(filters.metro, filters.category)
     names = dict(zip(table.area_id, table.name, strict=True))
     top = st.columns([4, 1], vertical_alignment="bottom")
     selected = top[0].multiselect(
@@ -70,14 +84,14 @@ def render() -> None:
         st.stop()
 
     cards = table.set_index("area_id").loc[selected].reset_index()
-    trends = queries.category_trends(filters.metro, filters.categories)
-    activity = queries.activity_hourly(filters.metro, filters.categories)
-    activity = activity[
-        (activity.obs_date >= pd.Timestamp(filters.start))
-        & (activity.obs_date <= pd.Timestamp(filters.end))
-        & activity.area_id.isin(selected)
-    ]
-    index = analysis.monthly_index(activity).reindex(columns=selected)
+    trends = queries.category_trends(filters.metro, filters.category)
+    daily = analysis.fill_daily(
+        queries.activity_daily(filters.metro, filters.category),
+        selected,
+        filters.start,
+        filters.end,
+    )
+    index = analysis.monthly_index(daily).reindex(columns=selected)
     review = {a: _review_trend(trends, a) for a in selected}
 
     export = cards[["area_id", "name", "score", "rank", "avg_weekly_checkins", "growth_yoy",
@@ -112,12 +126,12 @@ def render() -> None:
         st.pyplot(charts.index_lines(index, [names[a] for a in selected]))
     with right, st.container(border=True):
         first_year, last_year = review[selected[0]][3], review[selected[0]][4]
-        st.subheader(f"{', '.join(filters.categories)} trend, {first_year} → {last_year}")
+        st.subheader(f"{filters.category} trend, {first_year} → {last_year}")
         st.dataframe(
             pd.DataFrame(
                 {
                     "Area": [names[a] for a in selected],
-                    "Reviews (share)": [f"{review[a][0]:+.0%}".replace("-", "−") for a in selected],
+                    "Reviews (share)": [_share_text(review[a][0]) for a in selected],
                     "New shops": [review[a][1] for a in selected],
                     "Avg ★": [review[a][2] for a in selected],
                 }

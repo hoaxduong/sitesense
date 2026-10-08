@@ -150,42 +150,26 @@ def anomaly_scatter(points: pd.DataFrame) -> Figure:
     return figure
 
 
-def forecast_chart(history: pd.DataFrame, forecast: pd.DataFrame, scenario_label: str) -> Figure:
-    """Weekly history, typical forecast (dashed), scenario line and its 80% band."""
+def typical_year_chart(table: pd.DataFrame, scenario_label: str, week: int) -> Figure:
+    """Typical weekly check-ins (median, p10-p90 band), a scenario line and one actual year.
+
+    `table` columns: week, yhat, scenario, scenario_lo, scenario_hi, actual (may be NaN).
+    """
     figure, axes = _figure(8.5, 3.6)
-    h = np.arange(-len(history) + 1, 1)
-    f = forecast.week_offset.to_numpy()
-    axes.axvspan(0, f.max() + 0.5, color="#eef2f0", linewidth=0)
-    axes.plot(h, history.checkins, color=INK, linewidth=1.8, label="Actual")
-    joint = np.concatenate([[0], f])
-    last = float(history.checkins.iloc[-1])
-    axes.fill_between(joint, np.concatenate([[last], forecast.scenario_lo]),
-                      np.concatenate([[last], forecast.scenario_hi]), color=BAND, linewidth=0,
-                      label="80% range")  # fmt: skip
-    axes.plot(joint, np.concatenate([[last], forecast.yhat]), color=PRIMARY, linewidth=1.8,
-              linestyle="--", label="Typical season")  # fmt: skip
-    if not np.allclose(forecast.scenario, forecast.yhat):
-        axes.plot(joint, np.concatenate([[last], forecast.scenario]), color=NEGATIVE,
-                  linewidth=2, label=scenario_label)  # fmt: skip
-    axes.axvline(0, color=MUTED, linewidth=0.8, linestyle=":")
-    ticks = [int(h[0]), int(h[len(h) // 2]), 0, *(int(w) for w in f if w % 4 == 0)]
-    axes.set_xticks(ticks, [f"W{t}" if t < 0 else ("Now" if t == 0 else f"W+{t}") for t in ticks])
+    x = table.week.to_numpy()
+    axes.fill_between(x, table.scenario_lo, table.scenario_hi, color=BAND, linewidth=0,
+                      label="Range across 2016–2019 (p10–p90)")  # fmt: skip
+    if table.actual.notna().any():
+        axes.plot(x, table.actual, color=INK, linewidth=1.4, label="2019 actual")
+    axes.plot(x, table.yhat, color=PRIMARY, linewidth=1.8, linestyle="--", label="Typical (median)")
+    if not np.allclose(table.scenario, table.yhat):
+        axes.plot(x, table.scenario, color=NEGATIVE, linewidth=2, label=scenario_label)
+        axes.axvline(week, color=MUTED, linewidth=0.8, linestyle=":")
+    axes.set_xticks(x[:: max(1, len(x) // 6)], [f"W{w}" for w in x[:: max(1, len(x) // 6)]])
+    axes.set_xlabel("Week of the year", fontsize=8, color=MUTED)
     axes.set_ylabel("Check-ins per week", fontsize=8, color=MUTED)
     axes.set_ylim(bottom=0)
-    axes.legend(frameon=False, fontsize=8, ncols=4, loc="upper left")
-    return figure
-
-
-def driver_bars(drivers: pd.DataFrame) -> Figure:
-    """Horizontal bars of forecast driver shares (%)."""
-    table = drivers.sort_values("share_pct")
-    figure, axes = _figure(4.6, 2.4)
-    bars = axes.barh(table.driver, table.share_pct, color=PRIMARY, height=0.5)
-    axes.bar_label(bars, labels=[f"{v:.0f}%" for v in table.share_pct], fontsize=8, padding=3)
-    axes.grid(axis="y", visible=False)
-    axes.set_xlim(0, float(table.share_pct.max()) * 1.25)
-    axes.set_xticks([])
-    axes.tick_params(axis="y", labelsize=9, colors=INK)
+    axes.legend(frameon=False, fontsize=8, ncols=2, loc="lower left")
     return figure
 
 

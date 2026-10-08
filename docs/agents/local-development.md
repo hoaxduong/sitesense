@@ -19,6 +19,8 @@ uv sync --frozen --group notebooks
 
 ## App startup
 
+To run the whole stack (database, data publishing and dashboard) in containers, see [Run everything with Docker](../docker.md). For development with hot reload:
+
 Start the local PostgreSQL service and explicitly apply migrations before running the app:
 
 ```sh

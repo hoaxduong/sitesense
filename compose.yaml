@@ -1,12 +1,28 @@
 name: sitesense
 
+# One command: `docker compose up` (add --detach to run in the background), then open
+# http://localhost:8501. It builds the image, starts PostgreSQL, applies migrations, publishes
+# the dataset found under ./data (see docs/docker.md for the layout) and serves the dashboard.
+# Without a dataset the dashboard shows clearly labelled sample data.
+#
+# A local .env is optional: without it, a local-only default password is used. PostgreSQL and
+# the dashboard listen on 127.0.0.1 only. Rebuild the data after changing it:
+#   docker compose run --rm data python -m sitesense.pipeline
+
+x-app-image: &app-image
+  build: .
+  image: sitesense-app
+
+x-database-url: &database-url
+  DATABASE_URL: postgresql://${POSTGRES_USER:-sitesense}:${POSTGRES_PASSWORD:-sitesense-local-only}@db:5432/${POSTGRES_DB:-sitesense}
+
 services:
   db:
     image: postgres:18
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sitesense}
       POSTGRES_USER: ${POSTGRES_USER:-sitesense}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Create .env from .env.example and set a local password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sitesense-local-only}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -17,6 +33,41 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+
+  migrate:
+    <<: *app-image
+    command: ["python", "-m", "sitesense.database", "migrate"]
+    environment:
+      <<: *database-url
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  data:
+    <<: *app-image
+    command: ["python", "-m", "sitesense.pipeline", "--auto"]
+    user: root  # writes caches and the saved build into the mounted data folder
+    environment:
+      <<: *database-url
+      SITESENSE_ROOT: /workspace
+    volumes:
+      - ./data:/workspace/data
+      - ./config:/workspace/config:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  app:
+    <<: *app-image
+    environment:
+      <<: *database-url
+    ports:
+      - "127.0.0.1:${APP_PORT:-8501}:8501"
+    depends_on:
+      data:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:

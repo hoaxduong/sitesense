@@ -6,6 +6,16 @@ Weather-aware retail location assessment, built as one Python app with Streamlit
 
 See [the project features](docs/features.md) for the six planned capabilities, covering location recommendations, activity analysis, weather impacts, forecasting, site comparison, and explainability.
 
+## Run everything with Docker
+
+Put the dataset under `data/` (see [the Docker guide](docs/docker.md) for the layout), then run:
+
+```sh
+docker compose up --detach --wait
+```
+
+Open <http://localhost:8501>. Compose builds the image, starts PostgreSQL, applies migrations, publishes the data and serves the dashboard; without a dataset it shows labelled sample data. No `.env` is needed for this local setup.
+
 ## Start development
 
 Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with Compose v2 or newer. Install uv using the [official instructions](https://docs.astral.sh/uv/getting-started/installation/). Use `docker-compose` in place of `docker compose` if Compose is installed as a standalone command.

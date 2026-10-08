@@ -14,10 +14,10 @@ def current_weights() -> dict[str, float]:
     return {key: float(value) for key, value in stored.items()}
 
 
-def ranked_areas(metro: str, categories: tuple[str, ...]) -> pd.DataFrame:
-    factors = queries.area_factors(metro, categories)
+def ranked_areas(metro: str, category: str) -> pd.DataFrame:
+    factors = queries.area_factors(metro, category)
     scored = scoring.score_areas(factors, current_weights())
-    table = scored.merge(queries.areas(metro), on="area_id")
+    table = scored.merge(queries.areas(metro, category), on="area_id")
     table["heavy_rain_pct"] = (table.weather_resilience - 1) * 100
     table["sensitivity"] = table.heavy_rain_pct.map(scoring.sensitivity_label)
     return table
@@ -126,9 +126,9 @@ def render() -> None:
         "competition and weather resilience.",
         PROXY,
     )
-    areas = queries.areas(filters.metro)
-    factors = queries.area_factors(filters.metro, filters.categories)
-    activity = queries.activity_hourly(filters.metro, filters.categories)
+    areas = queries.areas(filters.metro, filters.category)
+    factors = queries.area_factors(filters.metro, filters.category)
+    activity = queries.activity_daily(filters.metro, filters.category)
     in_range = activity[
         (activity.obs_date >= pd.Timestamp(filters.start))
         & (activity.obs_date <= pd.Timestamp(filters.end))
@@ -149,7 +149,7 @@ def render() -> None:
     )  # fmt: skip
 
     _weights_panel()
-    table = ranked_areas(filters.metro, filters.categories)
+    table = ranked_areas(filters.metro, filters.category)
     left, right = st.columns([3, 2], gap="large")
     with left:
         st.subheader("Candidate map")
