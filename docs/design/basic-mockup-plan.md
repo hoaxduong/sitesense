@@ -124,8 +124,8 @@ Run the repository-required `uv run --frozen python scripts/check.py` and `uv ru
 ### Completed local validation
 
 - Migration `002_basic_app.sql` applied and source data imported into local PostgreSQL: 30,620 businesses, 210 source ZIP areas, and 3,574,448 check-in entries stored in 3,302,387 hourly buckets.
-- In an isolated checkout containing this change, scoped Python Ruff/formatting, mypy, package build, and all 86 tests passed, including 11 isolated PostgreSQL integration tests.
-- The required full `scripts/check.py` command stops at a pre-existing Ruff `I001` import-order error in `notebooks/03_forecasting_model_comparison.ipynb`. That notebook is unchanged from `main` and excluded from this change.
+- In an isolated checkout containing this change, the required full `scripts/check.py` command passed: Ruff/formatting, mypy, package build, and all 86 tests, including 11 isolated PostgreSQL integration tests.
+- An inherited notebook import-order issue was fixed by removing one blank source line in `notebooks/03_forecasting_model_comparison.ipynb`. Its code AST, outputs, execution counts, and metadata are unchanged.
 - The required smoke command passed for HTTP startup, all five native pages, and safe setup states.
 - Streamlit AppTest rendered all five pages against the imported database and verified city switches for Philadelphia, Nashville, and Tampa. A live browser check also verified the native layout, charts, and mock labels.
 
