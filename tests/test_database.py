@@ -52,8 +52,9 @@ def test_connect_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_packaged_migration_checksums_match_contents() -> None:
     migrations = database._load_migrations()
-    assert [migration.version for migration in migrations] == ["001_datasets"]
-    assert migrations[0].checksum == hashlib.sha256(migrations[0].sql.encode()).hexdigest()
+    assert [migration.version for migration in migrations] == ["001_datasets", "002_basic_app"]
+    for migration in migrations:
+        assert migration.checksum == hashlib.sha256(migration.sql.encode()).hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -122,12 +123,13 @@ def isolated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_migrations_are_idempotent_and_status_is_read_only(isolated_database: None) -> None:
-    assert database.status() == [("001_datasets", False)]
+    versions = [migration.version for migration in database._load_migrations()]
+    assert database.status() == [(version, False) for version in versions]
     with database.connect() as connection:
         assert connection.execute("SELECT to_regnamespace('sitesense')").fetchone() == (None,)
-    assert database.migrate() == ["001_datasets"]
+    assert database.migrate() == versions
     assert database.migrate() == []
-    assert database.status() == [("001_datasets", True)]
+    assert database.status() == [(version, True) for version in versions]
     with database.connect() as connection:
         row = connection.execute(
             """INSERT INTO sitesense.datasets (name, source_uri, version)
@@ -187,9 +189,10 @@ def test_an_earlier_migration_cannot_be_inserted_after_later_versions_are_applie
     isolated_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     migrations = database._load_migrations()
+    versions = [migration.version for migration in migrations]
     migrations.append(database._Migration("003_later", "SELECT 1", "later-checksum"))
     monkeypatch.setattr(database, "_load_migrations", lambda: migrations)
-    assert database.migrate() == ["001_datasets", "003_later"]
+    assert database.migrate() == [*versions, "003_later"]
     migrations.insert(
         1,
         database._Migration(

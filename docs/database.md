@@ -1,6 +1,6 @@
 # PostgreSQL
 
-PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The initial schema contains a dataset registry; importing business, check-in, or weather records is a separate increment.
+PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The basic app stores source ZIP areas, business snapshots, hourly check-in counts, and weather-cell mappings, alongside dataset provenance and import coverage.
 
 ## Local environment
 
@@ -10,6 +10,7 @@ For a fresh checkout, copy `.env.example` to `.env` and replace the example pass
 uv sync --frozen
 docker compose up --detach --wait db
 uv run --frozen --env-file .env python -m sitesense.database migrate
+uv run --frozen --env-file .env python -m sitesense.import_data
 uv run --frozen --env-file .env streamlit run app.py
 ```
 
@@ -37,7 +38,17 @@ with connect() as connection:
 
 Use parameter binding for values. Each connection context commits on success, rolls back on failure, and closes on exit. Do not share an open transaction between Streamlit sessions or cache an individual connection. There is no automatic migration during Streamlit reruns.
 
-The registry tracks dataset provenance only. Registering a dataset does not import its records, establish source coverage, or verify research readiness. The research page continues to state that check-in data, weather, and a trained model are not connected.
+The registry tracks dataset provenance. The importer separately creates business/activity records and stores its completed coverage and timestamp assumption in registry metadata. This does not certify dataset quality or establish a validated scoring or forecasting model.
+
+## Basic app import
+
+The explicit `sitesense.import_data` command reads the existing local Yelp business/check-in files and optional weather-cell/mapping files. It imports Philadelphia, Nashville, and Tampa, keeping exact category labels and source ZIP strings. Use `--help` to inspect source-path and coverage options. Raw files are not downloaded by the app.
+
+The default declared check-in import interval is 2009-12-30 through 2022-01-19. A completed import covers that interval even where no check-in was recorded; missing imports and dates outside coverage are not interpreted as zeros. Source date/hour values follow an explicitly unverified local-calendar assumption, and repeated timestamp entries are retained.
+
+Reimports transactionally replace the generated records for the selected city cohorts instead of adding activity counts. Unrelated dataset registry records are retained. A representative area point is the mean of its valid business coordinates, not a verified postal centroid; ZIP source labels do not define a polygon.
+
+The UI uses real historical activity and business snapshot information. Scores, weather effects, uncertainty, forecasts, review/opening trends, and recommendations are labeled illustrations. See the [confirmed implementation design](design/basic-mockup-plan.md) and [domain glossary](../CONTEXT.md).
 
 ## Migrations
 
@@ -64,7 +75,7 @@ uv run --frozen python scripts/smoke.py
 Run real database tests against your local development database:
 
 ```sh
-uv run --frozen --env-file .env python -c 'import os, subprocess, sys; os.environ["TEST_DATABASE_URL"] = os.environ["DATABASE_URL"]; subprocess.run([sys.executable, "-m", "pytest", "tests/test_database.py"], check=True)'
+uv run --frozen --env-file .env python -c 'import os, subprocess, sys; os.environ["TEST_DATABASE_URL"] = os.environ["DATABASE_URL"]; subprocess.run([sys.executable, "-m", "pytest", "tests/test_database.py", "tests/test_import_data.py"], check=True)'
 ```
 
 These tests create and remove a uniquely named disposable database, so the connection role needs `CREATEDB`. They do not modify the application's database. CI runs the same tests against a PostgreSQL 18 service. With no `TEST_DATABASE_URL`, integration tests are skipped; unit tests still run.
