@@ -1,10 +1,10 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The research workspace and dataset/forecasting notebooks share a uv project. Forecasting experiments run in notebooks; application data ingestion, model integration, and location scoring are future work.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. Scores, weather effects, and forecasts are labeled illustrations; forecasting experiments remain separate notebook work.
 
 ## Project features
 
-See [the project features](docs/features.md) for the six planned capabilities, covering location recommendations, activity analysis, weather impacts, forecasting, site comparison, and explainability.
+See [the project features](docs/features.md) for the product scope and [the basic app design](docs/design/basic-mockup-plan.md) for the five implemented screens, data boundaries, and illustrative outputs.
 
 ## Start development
 
@@ -12,11 +12,14 @@ Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with
 
 For a fresh checkout, copy `.env.example` to `.env` and replace the example password in both entries. Keep `DATABASE_URL` pointed at the local database. From the repository root:
 
+Prepare the local Yelp business/check-in files with [the dataset notebook](notebooks/01_yelp_dataset_exploration.ipynb) before running the import command. Weather-cell mapping files are optional; the app reports their spatial coverage.
+
 ```sh
 uv sync --frozen
 docker compose up --detach --wait db
 uv run --frozen --env-file .env python -m sitesense.database migrate
-uv run --frozen --env-file .env streamlit run app.py
+uv run --frozen --env-file .env python -m sitesense.import_data
+uv run --frozen --env-file .env streamlit run app.py --server.runOnSave=true
 ```
 
 Open <http://localhost:8501>. PostgreSQL 18 runs on `127.0.0.1:5432`, and Streamlit runs on the host with hot reload. PostgreSQL data lives in a named Docker volume and survives container restarts. Streamlit executes Python on its server; reusable application code lives in `src/sitesense`. No separate API server is required.
@@ -91,7 +94,7 @@ docker build --tag sitesense:local .
 docker run --rm --publish 127.0.0.1:8501:8501 sitesense:local
 ```
 
-This image contains the app and database driver. PostgreSQL runs separately; deployments supply `DATABASE_URL` through their secret store and apply migrations before starting application instances. The current research page does not query datasets yet. Provisioning the database does not import notebook data or make models ready.
+This image contains the app and database driver. PostgreSQL runs separately; deployments supply `DATABASE_URL` through their secret store and explicitly apply migrations and import source data before exploring locations. An unconfigured or empty database shows setup guidance. Database provisioning does not train or validate models.
 
 ## Project principles
 

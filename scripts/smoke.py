@@ -1,5 +1,6 @@
 """Check Streamlit server startup and execute the real app without external services."""
 
+import os
 import socket
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TextIO
+from unittest.mock import patch
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -62,12 +64,24 @@ def main() -> None:
             wait_until_healthy(f"{base_url}/_stcore/health", process, output)
             with urlopen(base_url, timeout=5) as response:
                 assert response.status == 200
-            app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
-            assert not app.exception, [error.message for error in app.exception]
-            assert app.title[0].value == "SiteSense AI"
-            assert app.info[0].value == "Not configured"
+            with patch.dict(os.environ):
+                os.environ.pop("DATABASE_URL", None)
+                app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
+                for page, title in (
+                    ("site_ranking", "Site ranking"),
+                    ("customer_activity", "Customer activity"),
+                    ("weather_impact", "Weather impact"),
+                    ("demand_forecast", "Demand forecast"),
+                    ("compare_sites", "Compare sites"),
+                ):
+                    app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
+                    assert not app.exception, [error.message for error in app.exception]
+                    assert app.title[0].value == "SiteSense AI"
+                    assert app.header[0].value == title
+                    assert app.info[0].value == "Database not configured"
+                    assert not app.metric
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, app rendering, and research readiness.")
+            print("Smoke passed: Streamlit server, five native pages, and safe database setup.")
         finally:
             process.terminate()
             try:
