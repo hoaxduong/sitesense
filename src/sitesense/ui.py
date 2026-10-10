@@ -3,12 +3,16 @@
 import csv
 import io
 from dataclasses import dataclass
+from datetime import date
 from statistics import mean
 from typing import cast
 
+import psycopg
 import streamlit as st
 
+from sitesense import repository
 from sitesense.analytics import haversine_km, summarize_activity
+from sitesense.database import ConfigurationError
 from sitesense.mock_data import (
     DIMENSION_LABELS,
     FORECAST_SCENARIOS,
@@ -20,7 +24,15 @@ from sitesense.mock_data import (
     stable_year_score,
     weather_example,
 )
-from sitesense.models import ActivityRecord, ActivitySummary, AreaSummary, Catalog, Filters
+from sitesense.models import (
+    ActivityRecord,
+    ActivitySummary,
+    AreaSummary,
+    Catalog,
+    Filters,
+    StationWeatherSummary,
+    WeatherCell,
+)
 
 MOCK_LABEL = "Illustrative mock content · No fitted model or measured weather effect"
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -33,6 +45,14 @@ class ScreenContext:
     catalog: Catalog
     records: tuple[ActivityRecord, ...]
     summaries: tuple[AreaSummary, ...]
+    import_revision: str = ""
+
+
+@st.cache_data(ttl=300, max_entries=32, show_spinner=False)
+def _station_weather(
+    cells: tuple[WeatherCell, ...], start_date: date, end_date: date, revision: str
+) -> tuple[StationWeatherSummary, ...]:
+    return repository.load_station_weather(cells, start_date, end_date)
 
 
 def render_setup(reason: str) -> None:
@@ -422,6 +442,18 @@ def render_weather() -> None:
     if context is None:
         return
     summary = _selected_area(context, "weather_area")
+    station_ids = {
+        business.weather_cell_id
+        for business in context.catalog.businesses
+        if business.area_id == summary.area.id
+    }
+    stations = tuple(
+        cell
+        for cell in context.catalog.weather_cells
+        if cell.weather_cell_id in station_ids and cell.source_kind == "acis_station"
+    )
+    if stations:
+        _render_station_weather(context, stations)
     with st.container(horizontal=True):
         event = st.selectbox("Weather event", WEATHER_EVENTS, key="weather_event")
         rainfall = st.slider(
@@ -443,7 +475,9 @@ def render_weather() -> None:
         f"p-value (mock): {effect.p_value:.3f}. This is illustrative, not an inference result."
     )
     st.metric(
-        "Mean mapped weather-cell distance (real)",
+        "Mean mapped weather-station distance (real)"
+        if context.catalog.weather_source == "acis_station"
+        else "Mean mapped weather-cell distance (real)",
         _number(_mean_weather_distance(context, summary.area.id), 1, " km"),
         border=True,
     )
@@ -496,6 +530,56 @@ def render_weather() -> None:
         st.caption(
             "A future analysis must align weather with local activity dates and validate its "
             "baseline and uncertainty. This screen has no causal estimate or measured significance."
+        )
+
+
+def _render_station_weather(context: ScreenContext, stations: tuple[WeatherCell, ...]) -> None:
+    with st.container(border=True):
+        st.subheader("Observed station weather (real)")
+        st.caption(
+            "ACIS station observations via Climate Explorer. Each station is summarized "
+            "separately for the selected date range. Dates are provider report-date labels; "
+            "observation windows may differ from local midnight-to-midnight activity days."
+        )
+        try:
+            summaries = _station_weather(
+                stations,
+                context.filters.start_date,
+                context.filters.end_date,
+                context.import_revision,
+            )
+        except (ConfigurationError, psycopg.Error):
+            st.info("Station observations are unavailable. Check the database and climate import.")
+            return
+        if not summaries:
+            st.info("No station observations have been imported for these mapped stations.")
+            return
+        st.dataframe(
+            [
+                {
+                    "Station": item.station_name,
+                    "Mean daily minimum °C": _number(item.mean_temp_min_c),
+                    "Minimum valid days": f"{item.temp_min_days:,} / {item.selected_days:,}",
+                    "Mean daily maximum °C": _number(item.mean_temp_max_c),
+                    "Maximum valid days": f"{item.temp_max_days:,} / {item.selected_days:,}",
+                    "Precipitation over valid reports (mm)": _number(item.precipitation_sum_mm),
+                    "Precipitation valid days": (
+                        f"{item.precipitation_days:,} / {item.selected_days:,}"
+                    ),
+                    "Latest usable report in selection": (
+                        str(item.latest_observed_date) if item.latest_observed_date else "N/A"
+                    ),
+                }
+                for item in summaries
+            ],
+            hide_index=True,
+            alt="Observed weather summaries and valid report coverage for mapped ACIS stations",
+        )
+        st.caption(
+            "Coverage counts usable reports for each variable, including zero rainfall. "
+            "Missing and flagged reports remain excluded; trace precipitation is treated as "
+            "0 mm and multi-day accumulations are excluded. Precipitation totals cover valid "
+            "reports only. These observations are separate from the illustrative effects below."
         )
 
 

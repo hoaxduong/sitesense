@@ -12,7 +12,7 @@ Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with
 
 For a fresh checkout, copy `.env.example` to `.env` and replace the example password in both entries. Keep `DATABASE_URL` pointed at the local database. From the repository root:
 
-Prepare the local Yelp business/check-in files with [the dataset notebook](notebooks/01_yelp_dataset_exploration.ipynb) before running the import command. Weather-cell mapping files are optional; the app reports their spatial coverage.
+Prepare the local Yelp business/check-in files with [the dataset notebook](notebooks/01_yelp_dataset_exploration.ipynb) and the [Climate Explorer station snapshot](docs/climate-explorer-data.md) before running the import command. The default weather source is ACIS daily station observations and their business mapping. Use `--without-weather` for an activity-only import.
 
 ```sh
 uv sync --frozen
@@ -47,7 +47,7 @@ uv run --frozen --group notebooks jupyter lab --notebook-dir=.
 
 In VS Code, select `.venv/bin/python` as the notebook kernel. Notebook dependencies are optional and stay out of the production app installation. Allow approximately 5 GB of free disk space for the 4.35 GB archive and working files. The ZIP contains a gzip-compressed TAR; the notebook scans it once to stage business/check-in JSON and a bounded review prefix, then reuses those files on matching reruns. Downloads and analysis outputs stay local under `data/`. See [data/README.md](data/README.md) for details and headless execution.
 
-Open [the weather notebook](notebooks/02_yelp_weather_dataset_exploration.ipynb) to download ERA5 weather for every Yelp dataset location and explore daily/monthly summaries. Its **Download data** section prepares the mapping and reuses verified yearly files. All acquisition code lives in the notebook. See [the weather guide](docs/weather-data.md) for the local subset, provenance, schema, and timestamp alignment before joining weather to activity.
+The [weather notebook](notebooks/02_yelp_weather_dataset_exploration.ipynb) retains the historical ERA5 research workflow. The local ERA5 dataset cache and UTC summaries were removed after switching the app to ACIS. Rerun its **Download data** section when a historical comparison needs ERA5 inputs. See [the historical weather guide](docs/weather-data.md) for acquisition, provenance, schema, and timestamp alignment.
 
 See [the research plan](docs/research/sitesense-research-plan.md) for the dataset audit, recommended experimental scope, model selection, evaluation protocol, and demo architecture. The report is in Vietnamese and distinguishes measured dataset findings from proposed experiments.
 

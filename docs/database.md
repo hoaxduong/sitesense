@@ -1,6 +1,6 @@
 # PostgreSQL
 
-PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The basic app stores source ZIP areas, business snapshots, hourly check-in counts, and weather-cell mappings, alongside dataset provenance and import coverage.
+PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The basic app stores source ZIP areas, business snapshots, hourly check-in counts, ACIS station observations and spatial mappings, alongside dataset provenance and import coverage.
 
 ## Local environment
 
@@ -42,13 +42,26 @@ The registry tracks dataset provenance. The importer separately creates business
 
 ## Basic app import
 
-The explicit `sitesense.import_data` command reads the existing local Yelp business/check-in files and optional weather-cell/mapping files. It imports Philadelphia, Nashville, and Tampa, keeping exact category labels and source ZIP strings. Use `--help` to inspect source-path and coverage options. Raw files are not downloaded by the app.
+The explicit `sitesense.import_data` command reads the existing local Yelp business/check-in files and the completed Climate Explorer station snapshot. It imports Philadelphia, Nashville, and Tampa, keeping exact category labels and source ZIP strings. Station weather replaces ERA5 as the default app weather source. Use `--climate-root` for another snapshot directory or `--without-weather` for an activity-only import. Raw files are not downloaded by the app.
+
+To seed or refresh weather for businesses already imported, without reimporting activity:
+
+```sh
+uv run --frozen --env-file .env python -m sitesense.database migrate
+uv run --frozen --env-file .env python -m sitesense.import_climate
+```
+
+The weather seed verifies completed source manifests and checksums, imports observations once per station/report date/variable, and updates business-to-station links in one transaction. Reruns replace that seed instead of adding observations. The existing `weather_cells` table stores spatial points for both legacy ERA5 grids and ACIS stations; `source_kind` distinguishes them. `station_weather_observations` stores normalized native Fahrenheit/inch values together with raw values, trace markers, primary/source flags, network IDs and local standard observation times. Missing values remain null.
+
+The Weather impact screen displays real station summaries in Celsius and millimeters, including accepted-day coverage. Accumulated and other flagged daily values are excluded, and trace precipitation is approximately zero with its marker retained. Station report dates have provider observation windows; these summaries do not establish an aligned activity/weather relationship. County annual/monthly climate projections remain separate local research inputs. Historical ERA5 comparison notebooks retain their original source.
+
+The local ERA5 dataset files, unused grid points and old spatial-mapping registry entry were removed after the switch to ACIS. Schema support for an explicitly supplied legacy mapping remains available. Existing historical research results are retained; comparisons that read the ERA5 dataset must reacquire it using notebook 02.
 
 The default declared check-in import interval is 2009-12-30 through 2022-01-19. A completed import covers that interval even where no check-in was recorded; missing imports and dates outside coverage are not interpreted as zeros. Source date/hour values follow an explicitly unverified local-calendar assumption, and repeated timestamp entries are retained.
 
 Reimports transactionally replace the generated records for the selected city cohorts instead of adding activity counts. Unrelated dataset registry records are retained. A representative area point is the mean of its valid business coordinates, not a verified postal centroid; ZIP source labels do not define a polygon.
 
-The UI uses real historical activity and business snapshot information. Scores, weather effects, uncertainty, forecasts, review/opening trends, and recommendations are labeled illustrations. See the [confirmed implementation design](design/basic-mockup-plan.md) and [domain glossary](../CONTEXT.md).
+The UI uses real historical activity, business snapshot information and station weather summaries. Scores, weather effects, uncertainty, forecasts, review/opening trends, and recommendations are labeled illustrations. See the [confirmed implementation design](design/basic-mockup-plan.md) and [domain glossary](../CONTEXT.md).
 
 ## Migrations
 
@@ -75,7 +88,7 @@ uv run --frozen python scripts/smoke.py
 Run real database tests against your local development database:
 
 ```sh
-uv run --frozen --env-file .env python -c 'import os, subprocess, sys; os.environ["TEST_DATABASE_URL"] = os.environ["DATABASE_URL"]; subprocess.run([sys.executable, "-m", "pytest", "tests/test_database.py", "tests/test_import_data.py"], check=True)'
+uv run --frozen --env-file .env python -c 'import os, subprocess, sys; os.environ["TEST_DATABASE_URL"] = os.environ["DATABASE_URL"]; subprocess.run([sys.executable, "-m", "pytest", "tests/test_database.py", "tests/test_import_data.py", "tests/test_import_climate.py", "tests/test_station_weather.py"], check=True)'
 ```
 
 These tests create and remove a uniquely named disposable database, so the connection role needs `CREATEDB`. They do not modify the application's database. CI runs the same tests against a PostgreSQL 18 service. With no `TEST_DATABASE_URL`, integration tests are skipped; unit tests still run.

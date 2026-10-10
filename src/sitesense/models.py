@@ -40,6 +40,24 @@ class WeatherCell:
     weather_cell_id: str
     latitude: float
     longitude: float
+    source_kind: str = "era5"
+    station_name: str | None = None
+
+
+@dataclass(frozen=True)
+class StationWeatherSummary:
+    """Per-station accepted report values; missing reports are never zeros."""
+
+    weather_cell_id: str
+    station_name: str
+    selected_days: int
+    temp_min_days: int
+    temp_max_days: int
+    precipitation_days: int
+    mean_temp_min_c: float | None
+    mean_temp_max_c: float | None
+    precipitation_sum_mm: float | None
+    latest_observed_date: date | None
 
 
 @dataclass(frozen=True)
@@ -72,6 +90,13 @@ class Catalog:
     businesses: tuple[Business, ...]
     weather_cells: tuple[WeatherCell, ...]
     coverage: DateCoverage
+
+    @property
+    def weather_source(self) -> str:
+        sources = {cell.source_kind for cell in self.weather_cells}
+        if not sources:
+            return "unavailable"
+        return next(iter(sources)) if len(sources) == 1 else "mixed"
 
 
 @dataclass(frozen=True)

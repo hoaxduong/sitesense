@@ -52,7 +52,11 @@ def test_connect_has_a_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_packaged_migration_checksums_match_contents() -> None:
     migrations = database._load_migrations()
-    assert [migration.version for migration in migrations] == ["001_datasets", "002_basic_app"]
+    assert [migration.version for migration in migrations] == [
+        "001_datasets",
+        "002_basic_app",
+        "003_station_weather",
+    ]
     for migration in migrations:
         assert migration.checksum == hashlib.sha256(migration.sql.encode()).hexdigest()
 

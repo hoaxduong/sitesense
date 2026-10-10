@@ -209,7 +209,7 @@ def weather_example(
             "Mock weather example: event counts, differences, intervals, p-values and scatter "
             f"points are synthetic. Rain threshold {rainfall_threshold_mm:g} mm and baseline "
             f"window {baseline_window_days} days change the illustration. They are not "
-            "computed from ERA5 or check-ins and provide no causal evidence."
+            "computed from imported weather or check-ins and provide no causal evidence."
         ),
     )
 

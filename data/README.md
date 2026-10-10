@@ -1,5 +1,7 @@
 # Dataset exploration
 
+The application's default weather source is the [Climate Explorer/ACIS daily station snapshot](../docs/climate-explorer-data.md). Apply migrations and run `uv run --frozen --env-file .env python -m sitesense.import_climate` to seed it for existing businesses, or use the default `sitesense.import_data` command to import Yelp and station weather together. The old ERA5 dataset cache and UTC summaries have been removed; historical comparison notebooks can reacquire them when needed.
+
 [The exploration notebook](../notebooks/01_yelp_dataset_exploration.ipynb) downloads the [provided Google Drive archive](https://drive.google.com/file/d/1cyir0oGMviwUjXPtMhvxpX27TQL2Lg6y/view?usp=sharing) to `data/raw/`. The archive is approximately 4.35 GB; allow approximately 5 GB of free disk space for it, working files, and small outputs.
 
 From the repository root:
@@ -32,11 +34,11 @@ Check-ins are recorded activity, not unique customers or revenue. This archive d
 
 See [the climate dataset shortlist](../docs/research/climate-datasets.md) for historical weather sources, verified sample availability, and the acquisition plan for the Philadelphia pilot.
 
-See [weather for every Yelp location](../docs/weather-data.md) for the hourly CSV schema, acquisition audits, and timezone alignment caveats. Local weather outputs live under `data/processed/yelp_weather/`.
+See [the historical ERA5 weather guide](../docs/weather-data.md) for the hourly CSV schema, acquisition audits, and timezone alignment caveats. Its optional acquisition workflow regenerates `data/processed/yelp_weather/`.
 
 Open [the weather notebook](../notebooks/02_yelp_weather_dataset_exploration.ipynb) to prepare the mapping and download ERA5 weather for all 150,346 business locations, then explore coverage, geographic and seasonal charts, and daily/monthly UTC summaries. Its **Download data** section reuses verified yearly files and fetches missing or corrupt partitions. All download and analysis code lives in the notebook and uses the same `notebooks` dependency group. The two weather exports are saved under `data/processed/yelp_weather_exploration/`.
 
-The weather dataset keeps 14 annual files, the business mapping, cell table, scope/download manifests, and `ATTRIBUTION.txt`. Yelp analysis exports and the two daily/monthly weather summaries remain as useful notebook deliverables; rerunning the notebooks regenerates them.
+The previous ERA5 cache (14 annual files, metadata/mappings, and daily/monthly UTC summaries) was removed. Yelp sources, ACIS observations and completed research results are retained. Rerun the weather notebook only when a historical comparison requires its ERA5 inputs.
 
 ## Forecasting comparison
 

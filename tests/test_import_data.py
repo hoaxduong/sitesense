@@ -14,6 +14,7 @@ import pytest
 from psycopg import sql
 
 from sitesense import database, import_data, repository
+from sitesense.import_climate import ClimateImportError, ClimateSources
 from sitesense.import_data import ImportDataError, ImportSources
 from sitesense.models import DateCoverage, Filters
 
@@ -137,6 +138,32 @@ def test_cli_redacts_raw_database_error(
     assert "secret" not in error and "postgresql://" not in error
 
 
+@pytest.mark.parametrize("without_weather", [False, True])
+def test_cli_defaults_to_station_weather_and_supports_activity_only(
+    monkeypatch: pytest.MonkeyPatch, without_weather: bool
+) -> None:
+    captured = []
+
+    def capture(sources: ImportSources, coverage: DateCoverage) -> import_data.ImportSummary:
+        captured.append(sources)
+        return import_data.ImportSummary(1, 1, 1, 1, 0, 0, 0, 0, 0)
+
+    monkeypatch.setattr(import_data, "import_sources", capture)
+    arguments = ["--climate-root", "/tmp/climate-snapshot"]
+    if without_weather:
+        arguments.append("--without-weather")
+    assert import_data.main(arguments) == 0
+    sources = captured[0]
+    assert sources.weather_cells is None and sources.weather_mapping is None
+    if without_weather:
+        assert sources.climate_sources is None
+    else:
+        assert sources.climate_sources is not None
+        assert sources.climate_sources.observations == Path(
+            "/tmp/climate-snapshot/yelp_stations/observations.csv.gz"
+        )
+
+
 def test_previous_year_maps_leap_day_without_subtracting_365_days() -> None:
     assert repository.previous_year(date(2020, 2, 29)) == date(2019, 2, 28)
     assert repository.previous_year(date(2021, 3, 1)) == date(2020, 3, 1)
@@ -222,6 +249,33 @@ def test_failed_reimport_rolls_back_deleted_snapshot_and_activity(
         import_data.import_sources(sources)
     assert repository.load_catalog("Philadelphia", "PA", "Coffee & Tea") == before
     assert repository.get_import_revision() == before_revision
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT sum(checkin_count) FROM sitesense.business_activity_hourly"
+        ).fetchone() == (8,)
+
+
+def test_failed_climate_seed_rolls_back_the_combined_yelp_import(
+    isolated_import_database: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = _sources(tmp_path)
+    import_data.import_sources(sources)
+    before = repository.load_catalog("Philadelphia", "PA", "Coffee & Tea")
+    revision = repository.get_import_revision()
+    _write_jsonl(sources.checkins, [{"business_id": "a", "date": "2019-01-01 12:00:00"}])
+
+    def fail_seed(*args: object) -> None:
+        raise ClimateImportError("Climate snapshot is incomplete.")
+
+    monkeypatch.setattr(import_data, "seed_climate", fail_seed)
+    with pytest.raises(ClimateImportError, match="incomplete"):
+        import_data.import_sources(
+            ImportSources(sources.businesses, sources.checkins, climate_sources=ClimateSources())
+        )
+    assert repository.load_catalog("Philadelphia", "PA", "Coffee & Tea") == before
+    assert repository.get_import_revision() == revision
     with database.connect() as connection:
         assert connection.execute(
             "SELECT sum(checkin_count) FROM sitesense.business_activity_hourly"

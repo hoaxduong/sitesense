@@ -109,7 +109,18 @@ def _shared_filters() -> tuple[Filters, Catalog, str]:
             f"Check-in dates/hours: assumed source-local calendar labels ({scope.timezone}); "
             "source timestamps have no verified timezone."
         )
-        st.caption("Weather match: spatial mapping to ERA5 cells, not daily weather completeness.")
+        if catalog.weather_source == "acis_station":
+            st.markdown("**ACIS station observations** · via Climate Explorer")
+            st.caption(
+                "Weather match: nearby ACIS station mapping. Daily report completeness is "
+                "shown on Weather impact."
+            )
+        elif catalog.weather_source == "era5":
+            st.caption(
+                "Weather match: spatial mapping to ERA5 cells, not daily weather completeness."
+            )
+        else:
+            st.caption("Weather match: imported spatial mapping, not daily weather completeness.")
     return Filters(city, scope.state, category, dates[0], dates[1], radius), catalog, revision
 
 
@@ -178,7 +189,7 @@ def render_app() -> None:
     except ConfigurationError:
         render_setup("configuration")
         return
-    except psycopg.errors.UndefinedTable:
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         render_setup("migration")
         return
     except repository.DataUnavailableError:
@@ -187,11 +198,26 @@ def render_app() -> None:
     except psycopg.Error:
         render_setup("connection")
         return
-    st.session_state["screen_context"] = ScreenContext(filters, catalog, records, summaries)
+    st.session_state["screen_context"] = ScreenContext(
+        filters, catalog, records, summaries, revision
+    )
     st.caption(
         f"{filters.city}, {filters.state} · {filters.category_label} · "
         f"{filters.start_date:%Y-%m-%d} to {filters.end_date:%Y-%m-%d}"
     )
     page.run()
+    if any(cell.source_kind == "acis_station" for cell in catalog.weather_cells):
+        try:
+            if not _import_is_unchanged(revision):
+                return
+        except ConfigurationError:
+            render_setup("configuration")
+            return
+        except repository.DataUnavailableError:
+            render_setup("import")
+            return
+        except psycopg.Error:
+            render_setup("connection")
+            return
     st.divider()
     st.caption("Check-ins are an activity proxy. Weather scenarios do not prove causal effects.")

@@ -61,7 +61,7 @@ def test_weather_controls_modify_synthetic_counts_effects_and_intervals() -> Non
         assert 0 <= effect.p_value <= 1
         assert "Synthetic" in effect.reliability
     assert "synthetic" in strong.explanation
-    assert "ERA5" in strong.explanation
+    assert "not computed from imported weather or check-ins" in strong.explanation
     assert len(strong.temperature_activity) > 10
 
 

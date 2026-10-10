@@ -2,7 +2,10 @@
 
 import hashlib
 import json
+import math
+from dataclasses import dataclass
 from datetime import date
+from statistics import mean
 
 from sitesense.database import connect
 from sitesense.models import (
@@ -12,6 +15,7 @@ from sitesense.models import (
     Catalog,
     DateCoverage,
     Filters,
+    StationWeatherSummary,
     WeatherCell,
 )
 
@@ -47,24 +51,33 @@ def get_import_revision() -> str:
     next explicit import; the metadata itself is never returned to the UI.
     """
     with connect() as connection:
-        row = connection.execute(
-            """SELECT metadata FROM sitesense.datasets
-               WHERE metadata ->> 'import_key' = 'basic_app_activity_v1'
+        rows = connection.execute(
+            """SELECT DISTINCT ON (metadata ->> 'import_key')
+                      metadata ->> 'import_key', metadata
+               FROM sitesense.datasets
+               WHERE metadata ->> 'import_key' IN
+                     ('basic_app_activity_v1', 'basic_app_climate_v1')
                  AND metadata ->> 'status' = 'complete'
-               ORDER BY id DESC LIMIT 1"""
-        ).fetchone()
-    if row is None:
+               ORDER BY metadata ->> 'import_key', id DESC"""
+        ).fetchall()
+    if not any(row[0] == "basic_app_activity_v1" for row in rows):
         raise DataUnavailableError("Run the explicit basic-app data import first.")
-    metadata = row[0]
-    revision = metadata.get("import_revision")
-    if isinstance(revision, str) and len(revision) == 32:
-        try:
-            int(revision, 16)
-        except ValueError:
-            pass
-        else:
-            return revision
-    serialized = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+    revisions: dict[str, str] = {}
+    for key, metadata in rows:
+        revision = metadata.get("import_revision")
+        if isinstance(revision, str) and len(revision) == 32:
+            try:
+                int(revision, 16)
+            except ValueError:
+                pass
+            else:
+                revisions[key] = revision
+                continue
+        serialized = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+        revisions[key] = hashlib.sha256(serialized.encode()).hexdigest()
+    if len(revisions) == 1:
+        return revisions["basic_app_activity_v1"]
+    serialized = json.dumps(revisions, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()
 
 
@@ -109,7 +122,8 @@ def load_catalog(city: str, state: str, category: str) -> Catalog:
             (city, state, category),
         ).fetchall()
         cell_rows = connection.execute(
-            """SELECT DISTINCT w.weather_cell_id, w.latitude, w.longitude
+            """SELECT DISTINCT w.weather_cell_id, w.latitude, w.longitude,
+                      w.source_kind, w.station_name
                FROM sitesense.weather_cells AS w JOIN sitesense.businesses AS b
                  ON w.weather_cell_id = b.weather_cell_id
                WHERE b.canonical_city = %s AND b.canonical_state = %s
@@ -173,3 +187,98 @@ def load_activity(
             ),
         ).fetchall()
     return tuple(ActivityRecord(*row) for row in rows)
+
+
+@dataclass(frozen=True)
+class _StationReport:
+    weather_cell_id: str
+    observation_date: date
+    variable: str
+    value: float | None
+    unit: str
+    raw_value: str
+    flag: str
+    is_trace: bool
+
+
+def _accepted_station_value(report: _StationReport) -> float | None:
+    """Apply the research station quality policy and convert native units."""
+    flag = report.flag.strip().upper()
+    precipitation = report.variable == "pcpn"
+    if flag and not (precipitation and flag == "T"):
+        return None
+    if report.unit != ("inch" if precipitation else "degreeF"):
+        return None
+    if precipitation and (flag == "T" or report.raw_value.strip() == "T" or report.is_trace):
+        return 0.0
+    value = report.value
+    if value is None or not math.isfinite(value) or value in (-999, -9999):
+        return None
+    if precipitation:
+        return value * 25.4 if value >= 0 else None
+    return (value - 32.0) * 5.0 / 9.0
+
+
+def _summarize_station_weather(
+    cells: tuple[WeatherCell, ...],
+    reports: tuple[_StationReport, ...],
+    start_date: date,
+    end_date: date,
+) -> tuple[StationWeatherSummary, ...]:
+    observations: dict[str, dict[date, dict[str, float]]] = {}
+    for report in reports:
+        value = _accepted_station_value(report)
+        if value is not None:
+            observations.setdefault(report.weather_cell_id, {}).setdefault(
+                report.observation_date, {}
+            )[report.variable] = value
+    summaries = []
+    for cell in cells:
+        values: dict[str, list[float]] = {"tmin": [], "tmax": [], "pcpn": []}
+        latest = None
+        for day, measured in observations.get(cell.weather_cell_id, {}).items():
+            if "tmin" in measured and "tmax" in measured and measured["tmin"] > measured["tmax"]:
+                measured.pop("tmin")
+                measured.pop("tmax")
+            if measured:
+                latest = max(latest, day) if latest else day
+            for variable, value in measured.items():
+                values[variable].append(value)
+        summaries.append(
+            StationWeatherSummary(
+                cell.weather_cell_id,
+                cell.station_name or cell.weather_cell_id.removeprefix("acis_"),
+                (end_date - start_date).days + 1,
+                len(values["tmin"]),
+                len(values["tmax"]),
+                len(values["pcpn"]),
+                mean(values["tmin"]) if values["tmin"] else None,
+                mean(values["tmax"]) if values["tmax"] else None,
+                sum(values["pcpn"]) if values["pcpn"] else None,
+                latest,
+            )
+        )
+    return tuple(summaries)
+
+
+def load_station_weather(
+    cells: tuple[WeatherCell, ...], start_date: date, end_date: date
+) -> tuple[StationWeatherSummary, ...]:
+    """Summarize each mapped station independently over provider report dates."""
+    if end_date < start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    stations = tuple(cell for cell in cells if cell.source_kind == "acis_station")
+    if not stations:
+        return ()
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT weather_cell_id, observation_date, variable, value, unit,
+                      raw_value, flag, is_trace
+               FROM sitesense.station_weather_observations
+               WHERE weather_cell_id = ANY(%s) AND observation_date BETWEEN %s AND %s
+               ORDER BY weather_cell_id, observation_date, variable""",
+            ([cell.weather_cell_id for cell in stations], start_date, end_date),
+        ).fetchall()
+    return _summarize_station_weather(
+        stations, tuple(_StationReport(*row) for row in rows), start_date, end_date
+    )

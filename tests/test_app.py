@@ -1,5 +1,6 @@
 """Exercise native routing, shared filters, setup states and mock provenance."""
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -16,8 +17,10 @@ from sitesense.models import (
     Catalog,
     DateCoverage,
     Filters,
+    StationWeatherSummary,
     WeatherCell,
 )
+from sitesense.ui import _station_weather
 
 APP_FILE = Path(__file__).resolve().parents[1] / "app.py"
 PAGES = {
@@ -35,6 +38,7 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     _categories.clear()
     _catalog.clear()
     _activity.clear()
+    _station_weather.clear()
 
 
 @pytest.fixture
@@ -328,3 +332,106 @@ def test_forecast_never_substitutes_mock_for_missing_real_activity(
     assert not app.exception
     assert any("No real historical activity" in info.value for info in app.info)
     assert not app.metric
+
+
+def _use_station_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_catalog = repository.load_catalog
+    monkeypatch.setattr(
+        repository,
+        "load_catalog",
+        lambda city, state, category: replace(
+            original_catalog(city, state, category),
+            weather_cells=(WeatherCell("cell", 40.0, -75.0, "acis_station", "Test station"),),
+        ),
+    )
+
+
+def test_weather_displays_real_station_reports_separately_from_mock_effects(
+    imported_data: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_station_catalog(monkeypatch)
+    monkeypatch.setattr(
+        repository,
+        "load_station_weather",
+        lambda cells, start, end: (
+            StationWeatherSummary(
+                "cell",
+                "Test station",
+                2557,
+                2500,
+                2499,
+                2400,
+                10.5,
+                21.2,
+                1234.5,
+                date(2021, 12, 30),
+            ),
+        ),
+    )
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert any("ACIS station observations" in item.value for item in app.markdown)
+    observed = next(frame.value for frame in app.dataframe if "Station" in frame.value.columns)
+    assert observed.iloc[0]["Mean daily minimum °C"] == "10.5"
+    assert observed.iloc[0]["Precipitation valid days"] == "2,400 / 2,557"
+    assert any("provider report-date labels" in item.value for item in app.caption)
+    assert any(
+        metric.label == "Mean mapped weather-station distance (real)" for metric in app.metric
+    )
+    assert any(metric.label == "Activity difference (mock)" for metric in app.metric)
+
+
+def test_climate_revision_refreshes_cached_station_reports(
+    imported_data: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_station_catalog(monkeypatch)
+    current_revision = ["first"]
+    monkeypatch.setattr(repository, "get_import_revision", lambda: current_revision[0])
+    calls: list[str] = []
+
+    def reports(
+        cells: tuple[WeatherCell, ...], start: date, end: date
+    ) -> tuple[StationWeatherSummary, ...]:
+        calls.append(current_revision[0])
+        return (
+            StationWeatherSummary(
+                "cell",
+                "Test station",
+                (end - start).days + 1,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+
+    monkeypatch.setattr(repository, "load_station_weather", reports)
+    app = _page(_app(), "weather_impact")
+    app.run()
+    assert calls == ["first"]
+    current_revision[0] = "second"
+    app.run()
+    assert not app.exception
+    assert calls == ["first", "second"]
+    observed = next(frame.value for frame in app.dataframe if "Station" in frame.value.columns)
+    assert observed.iloc[0]["Precipitation over valid reports (mm)"] == "N/A"
+
+
+def test_station_query_failure_does_not_expose_database_details(
+    imported_data: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_station_catalog(monkeypatch)
+
+    def fail(
+        cells: tuple[WeatherCell, ...], start: date, end: date
+    ) -> tuple[StationWeatherSummary, ...]:
+        raise psycopg.OperationalError("postgresql://secret-user:secret-pass@private")
+
+    monkeypatch.setattr(repository, "load_station_weather", fail)
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert any("Station observations are unavailable" in item.value for item in app.info)
+    assert not any("secret" in item.value for item in app.info)

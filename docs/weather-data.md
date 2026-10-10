@@ -1,4 +1,6 @@
-# Weather for every Yelp location
+# Historical ERA5 weather for Yelp locations
+
+The app now uses [Climate Explorer/ACIS station observations](climate-explorer-data.md). On 2026-10-10 the local ERA5 dataset cache under `data/processed/yelp_weather/` and its daily/monthly UTC summaries under `data/processed/yelp_weather_exploration/` were removed. Unused ERA5 database grid points and their registry entry were also removed. The acquisition workflow and historical research results are retained; rerun notebook 02 to reacquire ERA5 before reproducing an older comparison. The details below describe that historical dataset and its reproducible acquisition.
 
 The acquisition scope includes all **150,346 businesses**, including the 18,416 without check-ins. Their coordinates map to **111 ERA5 grid cells**. Each cell receives the same hourly interval: **2009-12-29 through 2022-01-20**, inclusive. This adds one day before and after the archive's observed check-in dates to support later timezone alignment.
 

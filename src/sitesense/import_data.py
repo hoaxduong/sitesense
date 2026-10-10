@@ -1,7 +1,7 @@
 """Explicit, transactional import of the three basic-app Yelp city cohorts.
 
-Raw files remain on disk. Only business snapshots, sparse hourly check-in
-counts and spatial weather-cell metadata are imported; no models are trained.
+Raw files remain on disk. Business snapshots, sparse hourly check-in counts,
+and Climate Explorer/ACIS station weather are imported; no models are trained.
 """
 
 import argparse
@@ -24,6 +24,12 @@ from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
 from sitesense.database import ConfigurationError, connect
+from sitesense.import_climate import (
+    DEFAULT_CLIMATE_SOURCES,
+    ClimateImportError,
+    ClimateSources,
+    seed_climate,
+)
 from sitesense.models import CITY_SCOPES, CityScope, DateCoverage, WeatherCell
 
 DEFAULT_COVERAGE = DateCoverage(date(2009, 12, 30), date(2022, 1, 19))
@@ -46,11 +52,12 @@ class ImportDataError(ValueError):
 class ImportSources:
     businesses: Path = Path("data/raw/yelp_exploration/business.jsonl")
     checkins: Path = Path("data/raw/yelp_exploration/checkin.jsonl")
-    weather_cells: Path | None = Path("data/processed/yelp_weather/weather_cells.csv")
-    weather_mapping: Path | None = Path("data/processed/yelp_weather/business_weather_mapping.csv")
+    weather_cells: Path | None = None
+    weather_mapping: Path | None = None
+    climate_sources: ClimateSources | None = None
 
 
-DEFAULT_SOURCES = ImportSources()
+DEFAULT_SOURCES = ImportSources(climate_sources=DEFAULT_CLIMATE_SOURCES)
 
 
 @dataclass(frozen=True)
@@ -339,6 +346,10 @@ def import_sources(
         raise ImportDataError("Import coverage or timestamp policy is invalid.")
     if not sources.businesses.is_file() or not sources.checkins.is_file():
         raise ImportDataError("The business and check-in JSONL source files are required.")
+    if sources.climate_sources is not None and (
+        sources.weather_cells is not None or sources.weather_mapping is not None
+    ):
+        raise ImportDataError("Choose station weather or an explicit legacy weather mapping.")
     businesses, excluded = read_businesses(sources.businesses)
     if not businesses:
         raise ImportDataError("No businesses match the three supported city/state cohorts.")
@@ -383,12 +394,16 @@ def import_sources(
         activity_dataset = _dataset(
             connection, "basic_app_activity_v1", "Yelp hourly activity", sources.checkins, metadata
         )
-        weather_dataset = _dataset(
-            connection,
-            "basic_app_weather_v1",
-            "ERA5 spatial weather mapping",
-            sources.weather_cells,
-            metadata,
+        weather_dataset = (
+            _dataset(
+                connection,
+                "basic_app_weather_v1",
+                "ERA5 spatial weather mapping",
+                sources.weather_cells,
+                metadata,
+            )
+            if sources.climate_sources is None
+            else None
         )
         connection.execute(
             "DELETE FROM sitesense.businesses WHERE dataset_id = %s",
@@ -471,11 +486,22 @@ def import_sources(
                 "outside_coverage_count": outside,
             }
         )
-        for dataset_id, key in (
+        mapped_count, point_count = len(mapping), len(weather_cells)
+        if sources.climate_sources is not None:
+            climate = seed_climate(connection, sources.climate_sources)
+            mapped_count, point_count = climate.mapped_business_count, climate.station_count
+            metadata.update(
+                weather_source="Climate Explorer / ACIS daily station observations",
+                mapped_business_count=mapped_count,
+                spatial_mapping_coverage=mapped_count / len(businesses),
+            )
+        datasets = [
             (business_dataset, "basic_app_businesses_v1"),
             (activity_dataset, "basic_app_activity_v1"),
-            (weather_dataset, "basic_app_weather_v1"),
-        ):
+        ]
+        if weather_dataset is not None:
+            datasets.append((weather_dataset, "basic_app_weather_v1"))
+        for dataset_id, key in datasets:
             connection.execute(
                 "UPDATE sitesense.datasets SET metadata = %s WHERE id = %s",
                 (Jsonb({**metadata, "import_key": key}), dataset_id),
@@ -486,12 +512,13 @@ def import_sources(
                                          ('Tampa', 'FL'))
                  AND NOT EXISTS (SELECT 1 FROM sitesense.businesses AS b WHERE b.area_id = a.id)"""
         )
-        connection.execute(
-            """DELETE FROM sitesense.weather_cells AS w WHERE dataset_id = %s
+        if weather_dataset is not None:
+            connection.execute(
+                """DELETE FROM sitesense.weather_cells AS w WHERE dataset_id = %s
                  AND NOT EXISTS (SELECT 1 FROM sitesense.businesses AS b
                                  WHERE b.weather_cell_id = w.weather_cell_id)""",
-            (weather_dataset,),
-        )
+                (weather_dataset,),
+            )
     return ImportSummary(
         len(businesses),
         len(area_ids),
@@ -499,20 +526,26 @@ def import_sources(
         checkin_count,
         excluded,
         invalid_zip_count,
-        len(mapping),
-        len(weather_cells),
+        mapped_count,
+        point_count,
         outside,
     )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    defaults = ImportSources()
+    defaults = DEFAULT_SOURCES
     parser.add_argument("--businesses", type=Path, default=defaults.businesses)
     parser.add_argument("--checkins", type=Path, default=defaults.checkins)
     parser.add_argument("--weather-cells", type=Path, default=defaults.weather_cells)
     parser.add_argument("--weather-mapping", type=Path, default=defaults.weather_mapping)
     parser.add_argument("--without-weather", action="store_true")
+    parser.add_argument(
+        "--climate-root",
+        type=Path,
+        default=Path("data/raw/climate_explorer"),
+        help="Climate Explorer snapshot directory (default weather source).",
+    )
     parser.add_argument(
         "--start-date", type=date.fromisoformat, default=DEFAULT_COVERAGE.start_date
     )
@@ -523,10 +556,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.checkins,
         None if args.without_weather else args.weather_cells,
         None if args.without_weather else args.weather_mapping,
+        (
+            ClimateSources(
+                observations=args.climate_root / "yelp_stations/observations.csv.gz",
+                station_manifest=args.climate_root / "yelp_stations/manifest.json",
+                business_mapping=args.climate_root / "yelp_scope/business_climate_mapping.csv",
+                scope_manifest=args.climate_root / "yelp_scope/scope_manifest.json",
+            )
+            if (
+                not args.without_weather
+                and args.weather_cells is None
+                and args.weather_mapping is None
+            )
+            else None
+        ),
     )
     try:
         summary = import_sources(sources, DateCoverage(args.start_date, args.end_date))
-    except (ConfigurationError, ImportDataError) as error:
+    except (ConfigurationError, ImportDataError, ClimateImportError) as error:
         print(str(error), file=sys.stderr)
         return 1
     except psycopg.Error:
