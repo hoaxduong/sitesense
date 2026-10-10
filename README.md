@@ -1,21 +1,25 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. Scores, weather effects, and forecasts are labeled illustrations; forecasting experiments remain separate notebook work.
-
-## Project features
-
-See [the project features](docs/features.md) for the product scope and [the basic app design](docs/design/basic-mockup-plan.md) for the five implemented screens, data boundaries, and illustrative outputs.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. Scores, weather effects, and forecasts are labeled illustrations.
 
 ## Start development
 
 Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with Compose v2 or newer. Install uv using the [official instructions](https://docs.astral.sh/uv/getting-started/installation/). Use `docker-compose` in place of `docker compose` if Compose is installed as a standalone command.
 
-For a fresh checkout, copy `.env.example` to `.env` and replace the example password in both entries. Keep `DATABASE_URL` pointed at the local database. From the repository root:
+For a fresh checkout, follow this order: **install dependencies → run notebook 01 → run notebook 02 → migrate the database → import data → start the app**. Copy `.env.example` to `.env` and replace the example password in both entries. Keep `DATABASE_URL` pointed at the local database. Run commands from the repository root.
 
-Prepare the local Yelp business/check-in files with [the dataset notebook](notebooks/01_yelp_dataset_exploration.ipynb) and the [Climate Explorer station snapshot](docs/climate-explorer-data.md) before running the import command. The default weather source is ACIS daily station observations and their business mapping. Use `--without-weather` for an activity-only import.
+First install the notebook dependencies and open Jupyter:
 
 ```sh
-uv sync --frozen
+uv sync --frozen --group notebooks
+uv run --frozen --group notebooks jupyter lab --notebook-dir=.
+```
+
+In JupyterLab, select **Python 3 (ipykernel)** from this project's environment; in VS Code, select `.venv/bin/python`. Use **Restart Kernel and Run All** for [01 — Yelp](notebooks/01_yelp_dataset_exploration.ipynb), then [02 — Climate](notebooks/02_climate_dataset_exploration.ipynb). **Both notebooks must finish without errors before the first data import.** They download or verify the supplied archives and stage the files used by the importer; they do not require PostgreSQL. See [data/README.md](data/README.md) for headless execution and output paths.
+
+After both notebooks finish, start PostgreSQL, apply migrations, import Yelp and ACIS station weather together, and start Streamlit:
+
+```sh
 docker compose up --detach --wait db
 uv run --frozen --env-file .env python -m sitesense.database migrate
 uv run --frozen --env-file .env python -m sitesense.import_data
@@ -36,24 +40,16 @@ Stopping Streamlit with Ctrl+C leaves PostgreSQL running. If port 5432 is alread
 
 Configuration is in `.streamlit/config.toml`. Local database credentials are in ignored `.env`; keep other credentials in ignored `.streamlit/secrets.toml` or your hosting platform's secret store, and avoid rendering secrets in the UI. The database module reads `DATABASE_URL` from the process environment; `uv run --env-file .env` loads it for local commands.
 
-## Explore the dataset
+## Explore the datasets
 
-Open [the Yelp exploration notebook](notebooks/01_yelp_dataset_exploration.ipynb) to download the linked Google Drive archive, inspect business and check-in data, and compare seasonal activity baselines on a temporal holdout.
+Start with two notebooks, each using the supplied Google Drive archive:
 
-```sh
-uv sync --frozen --group notebooks
-uv run --frozen --group notebooks jupyter lab --notebook-dir=.
-```
+| Notebook | Source | Exploration |
+| --- | --- | --- |
+| [01 — Yelp](notebooks/01_yelp_dataset_exploration.ipynb) | [Yelp-JSON.zip](https://drive.google.com/file/d/1cyir0oGMviwUjXPtMhvxpX27TQL2Lg6y/view?usp=drive_link) | Business coverage, categories, check-in dates and activity, bounded review sample |
+| [02 — Climate](notebooks/02_climate_dataset_exploration.ipynb) | [Climate-Explorer.zip](https://drive.google.com/file/d/1yPxTytgYTcc0V9X5w-zk1_SoBts_bZhI/view?usp=drive_link) | Station coverage/flags, actual observation dates, complete-month summaries, county history and scenarios |
 
-In VS Code, select `.venv/bin/python` as the notebook kernel. Notebook dependencies are optional and stay out of the production app installation. Allow approximately 5 GB of free disk space for the 4.35 GB archive and working files. The ZIP contains a gzip-compressed TAR; the notebook scans it once to stage business/check-in JSON and a bounded review prefix, then reuses those files on matching reruns. Downloads and analysis outputs stay local under `data/`. See [data/README.md](data/README.md) for details and headless execution.
-
-The [weather notebook](notebooks/02_yelp_weather_dataset_exploration.ipynb) retains the historical ERA5 research workflow. The local ERA5 dataset cache and UTC summaries were removed after switching the app to ACIS. Rerun its **Download data** section when a historical comparison needs ERA5 inputs. See [the historical weather guide](docs/weather-data.md) for acquisition, provenance, schema, and timestamp alignment.
-
-See [the research plan](docs/research/sitesense-research-plan.md) for the dataset audit, recommended experimental scope, model selection, evaluation protocol, and demo architecture. The report is in Vietnamese and distinguishes measured dataset findings from proposed experiments.
-
-Open [the forecasting comparison notebook](notebooks/03_forecasting_model_comparison.ipynb) after preparing both datasets. It explains each step in simple Vietnamese and compares seasonal/recent-mean/zero baselines, Poisson regression, histogram gradient boosting, and CatBoost. The default experiment uses daily Restaurant check-ins in Philadelphia, Tampa, and Nashville: rolling validation in 2017–2018, a locked 2019 test, and a separate 2020–2021 stress test. It also checks timestamp assumptions and a one-day reporting delay. Weather variants use realized ERA5 and measure retrospective predictive value. They do not yet use weather forecasts available before the target day.
-
-Run all cells from the beginning. Each run saves metrics, predictions, plots, trained models, and a provenance manifest to a new local folder under `data/processed/forecast_comparison/`. See [data/README.md](data/README.md) for headless execution and the comparison protocol.
+Run notebook 01, then notebook 02 as part of the first setup above. Each notebook downloads or verifies its archive, stages files at the paths used by the importer, and saves bounded summaries. Cached archives are `data/downloads/yelp.zip` and `data/downloads/climate.zip`; source tables are under `data/raw/yelp/` and `data/raw/climate/`; exploration results and executed copies are under the corresponding `data/processed/` directories. Keep about 5 GB free for Yelp and 550 MB for Climate, plus analysis outputs. These artifacts remain ignored by Git. See [data/README.md](data/README.md) for paths, headless execution and [Climate observation/scenario definitions](data/README.md#climate-snapshot).
 
 ## Validation
 
@@ -71,19 +67,20 @@ Use `uv run --frozen ruff format .` to format Python code. `uv build` creates a 
 ```text
 app.py                  Streamlit entry point
 src/sitesense/          Reusable Python modules and UI rendering
+src/sitesense/import_data/ Yelp and Climate adapters, transaction pipeline, and CLI
 src/sitesense/migrations/ Versioned PostgreSQL schema migrations
 compose.yaml            Local PostgreSQL service and persistent volume
 .env.example            Example local database configuration
 pyproject.toml          Application, development, and optional notebook dependencies
 uv.lock                 Shared Python dependency lockfile
 .streamlit/config.toml  Streamlit configuration and theme
-tests/                  App, database, data preparation, and forecasting tests
+tests/                  App, database, and data preparation tests
 scripts/                Validation and server smoke checks
-notebooks/              Dataset download, exploration, and forecasting comparison
+notebooks/              Two dataset download and exploration notebooks
 data/                   Local source and analysis artifacts
 ```
 
-See [the technology stack guide](docs/tech-stack.md) for versions, component details, tradeoffs, and why each technology fits SiteSense. See [architecture.md](docs/architecture.md) for application boundaries and research principles.
+See [the domain glossary](CONTEXT.md) and [the area-grain decision](docs/adr/0001-compare-source-zip-areas.md) for the meaning and scope of application data. Dependency versions are recorded in `pyproject.toml` and `uv.lock`.
 
 ## Container
 

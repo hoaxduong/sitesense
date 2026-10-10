@@ -59,4 +59,4 @@ jobs:
       - name: Test PostgreSQL migrations, imports, and persistence
         env:
           TEST_DATABASE_URL: postgresql://sitesense_ci:sitesense_ci_only@127.0.0.1:5432/sitesense_ci
-        run: uv run --frozen pytest tests/test_database.py tests/test_import_data.py tests/test_import_climate.py tests/test_station_weather.py
+        run: uv run --frozen pytest tests/test_database.py tests/test_import_data.py tests/test_import_yelp.py tests/test_import_climate.py tests/test_station_weather.py

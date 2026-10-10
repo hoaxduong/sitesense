@@ -1,19 +1,16 @@
-"""Seed a completed local Climate Explorer/ACIS snapshot without network access.
+"""Read and persist the Climate Explorer/ACIS station snapshot.
 
-Native daily station values, missing observations and every provider flag remain
-explicit. Quality filtering and Celsius/millimeter conversion belong to readers.
+The adapter preserves native daily values, units and provenance. Database writes
+use the caller's connection, so the pipeline controls the overall transaction.
 """
 
-import argparse
 import csv
 import gzip
-import hashlib
 import json
 import math
 import re
-import sys
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -24,13 +21,34 @@ import psycopg
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 
-from sitesense.climate_explorer import climate_value
-from sitesense.climate_stations import COLUMNS, parse_observation
-from sitesense.database import ConfigurationError, connect
+from .shared import IMPORT_LOCK, fingerprint
 
-_IMPORT_LOCK = 1_892_575_310
-_IMPORT_KEY = "basic_app_climate_v1"
+_CLIMATE_IMPORT_KEY = "basic_app_climate_v1"
+DEFAULT_CLIMATE_ROOT = Path("data/raw/climate")
+
+
 _UNITS = {"tmax": "degreeF", "tmin": "degreeF", "pcpn": "inch"}
+
+
+COLUMNS = (
+    "station_id",
+    "station_name",
+    "station_county_fips",
+    "station_state",
+    "station_latitude",
+    "station_longitude",
+    "station_elevation_ft",
+    "date",
+    "variable",
+    "value",
+    "unit",
+    "raw_value",
+    "flag",
+    "network_id",
+    "source_flag",
+    "observation_time_local_standard",
+    "is_trace",
+)
 
 
 class ClimateImportError(ValueError):
@@ -38,16 +56,25 @@ class ClimateImportError(ValueError):
 
 
 @dataclass(frozen=True)
+class Observation:
+    value: float | None
+    raw_value: str
+    flag: str
+    network: str
+    source_flag: str
+    observation_time: str
+
+    @property
+    def is_trace(self) -> bool:
+        return self.flag.strip() == "T" or self.raw_value == "T"
+
+
+@dataclass(frozen=True)
 class ClimateSources:
-    observations: Path = Path("data/raw/climate_explorer/yelp_stations/observations.csv.gz")
-    station_manifest: Path = Path("data/raw/climate_explorer/yelp_stations/manifest.json")
-    business_mapping: Path = Path(
-        "data/raw/climate_explorer/yelp_scope/business_climate_mapping.csv"
-    )
-    scope_manifest: Path = Path("data/raw/climate_explorer/yelp_scope/scope_manifest.json")
-
-
-DEFAULT_CLIMATE_SOURCES = ClimateSources()
+    observations: Path = DEFAULT_CLIMATE_ROOT / "yelp_stations/observations.csv.gz"
+    station_manifest: Path = DEFAULT_CLIMATE_ROOT / "yelp_stations/manifest.json"
+    business_mapping: Path = DEFAULT_CLIMATE_ROOT / "yelp_scope/business_climate_mapping.csv"
+    scope_manifest: Path = DEFAULT_CLIMATE_ROOT / "yelp_scope/scope_manifest.json"
 
 
 @dataclass(frozen=True)
@@ -73,21 +100,17 @@ class _Station:
 
 
 @dataclass(frozen=True)
-class _Snapshot:
+class ClimateSnapshot:
     manifest: dict[str, Any]
     scope_manifest: dict[str, Any]
     stations: dict[str, _Station]
     start: date
     end: date
     fingerprints: dict[str, dict[str, object]]
+    sources: ClimateSources
 
 
-def _fingerprint(path: Path) -> dict[str, object]:
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return {"path": str(path), "sha256": hasher.hexdigest()}
+DEFAULT_CLIMATE_SOURCES = ClimateSources()
 
 
 def _json_object(path: Path) -> dict[str, Any]:
@@ -97,7 +120,7 @@ def _json_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def _coordinate(value: object, limit: float) -> float:
+def _climate_coordinate(value: object, limit: float) -> float:
     if isinstance(value, bool) or value is None or value == "":
         raise ClimateImportError("Climate coordinates must be present and numeric.")
     number = float(str(value))
@@ -106,9 +129,48 @@ def _coordinate(value: object, limit: float) -> float:
     return number
 
 
-def _read_snapshot(sources: ClimateSources) -> _Snapshot:
+def climate_value(value: Any) -> float | None:
+    if value is None or (isinstance(value, str) and value.strip() in {"", "M"}):
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"Unrecognized climate value: {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"Non-finite climate value: {value!r}")
+    return None if number in (-999, -9999) else number
+
+
+def parse_observation(element: Any, variable: str) -> Observation:
+    if not isinstance(element, list) or len(element) != 5 or not isinstance(element[1], str):
+        raise ValueError(
+            "Each station element needs value, flag, network, source and observation time."
+        )
+    raw, flag, network, source, observed_at = element
+    if any(isinstance(item, (dict, list, bool)) for item in element):
+        raise ValueError("Station values and provenance must be scalar.")
+    value = 0.0 if raw == "T" else climate_value(raw)
+    observation = Observation(
+        value,
+        "" if raw is None else str(raw),
+        flag,
+        "" if network is None else str(network),
+        "" if source is None else str(source),
+        "" if observed_at is None else str(observed_at),
+    )
+    if flag.strip() == "M" and value is not None:
+        raise ValueError("Missing station flag cannot accompany a numeric value.")
+    if observation.is_trace and (variable != "pcpn" or value != 0):
+        raise ValueError("Trace flag requires zero precipitation, retained as trace.")
+    return observation
+
+
+def _same_coordinate(first: float, second: float) -> bool:
+    return math.isclose(first, second, abs_tol=1e-7, rel_tol=0)
+
+
+def _read_snapshot(sources: ClimateSources) -> ClimateSnapshot:
     fingerprints = {
-        name: _fingerprint(path)
+        name: fingerprint(path)
         for name, path in (
             ("observations", sources.observations),
             ("station_manifest", sources.station_manifest),
@@ -184,8 +246,8 @@ def _read_snapshot(sources: ClimateSources) -> _Snapshot:
         stations[sid] = _Station(
             sid,
             metadata["name"],
-            _coordinate(latitude, 90),
-            _coordinate(longitude, 180),
+            _climate_coordinate(latitude, 90),
+            _climate_coordinate(longitude, 180),
             coverage,
         )
     if (
@@ -196,16 +258,12 @@ def _read_snapshot(sources: ClimateSources) -> _Snapshot:
         raise ClimateImportError(
             "Station manifests do not match complete station/date/variable scope."
         )
-    return _Snapshot(manifest, scope_manifest, stations, start, end, fingerprints)
-
-
-def _same_coordinate(first: float, second: float) -> bool:
-    return math.isclose(first, second, abs_tol=1e-7, rel_tol=0)
+    return ClimateSnapshot(manifest, scope_manifest, stations, start, end, fingerprints, sources)
 
 
 def _read_mapping(
     sources: ClimateSources,
-    snapshot: _Snapshot,
+    snapshot: ClimateSnapshot,
     businesses: dict[str, tuple[float | None, float | None]],
 ) -> dict[str, str]:
     mapping = {}
@@ -218,8 +276,8 @@ def _read_mapping(
             if not business_id or business_id in seen:
                 raise ClimateImportError("Climate mapping business IDs must be present and unique.")
             seen.add(business_id)
-            latitude = _coordinate(row["latitude"], 90)
-            longitude = _coordinate(row["longitude"], 180)
+            latitude = _climate_coordinate(row["latitude"], 90)
+            longitude = _climate_coordinate(row["longitude"], 180)
             if business_id in businesses:
                 expected_lat, expected_lon = businesses[business_id]
                 if (
@@ -242,9 +300,11 @@ def _read_mapping(
             if station is None:
                 raise ClimateImportError("Climate mapping references an unknown station.")
             if (
-                not _same_coordinate(station.latitude, _coordinate(row["station_latitude"], 90))
+                not _same_coordinate(
+                    station.latitude, _climate_coordinate(row["station_latitude"], 90)
+                )
                 or not _same_coordinate(
-                    station.longitude, _coordinate(row["station_longitude"], 180)
+                    station.longitude, _climate_coordinate(row["station_longitude"], 180)
                 )
                 or row["station_name"] != station.name
             ):
@@ -265,7 +325,9 @@ def _read_mapping(
     return mapping
 
 
-def _observation_rows(sources: ClimateSources, snapshot: _Snapshot) -> Iterator[tuple[object, ...]]:
+def _observation_rows(
+    sources: ClimateSources, snapshot: ClimateSnapshot
+) -> Iterator[tuple[object, ...]]:
     """Check unique complete keys with date bitmaps while streaming native rows."""
     seen: dict[tuple[str, str], int] = {}
     missing: Counter[tuple[str, str]] = Counter()
@@ -287,9 +349,11 @@ def _observation_rows(sources: ClimateSources, snapshot: _Snapshot) -> Iterator[
                 )
             if (
                 row["station_name"] != station.name
-                or not _same_coordinate(station.latitude, _coordinate(row["station_latitude"], 90))
                 or not _same_coordinate(
-                    station.longitude, _coordinate(row["station_longitude"], 180)
+                    station.latitude, _climate_coordinate(row["station_latitude"], 90)
+                )
+                or not _same_coordinate(
+                    station.longitude, _climate_coordinate(row["station_longitude"], 180)
                 )
             ):
                 raise ClimateImportError("Observation station metadata differs from its manifest.")
@@ -361,10 +425,10 @@ def _observation_rows(sources: ClimateSources, snapshot: _Snapshot) -> Iterator[
         raise ClimateImportError("Missing observation count differs from station manifest.")
 
 
-def _dataset(connection: psycopg.Connection[TupleRow], sources: ClimateSources) -> int:
+def _climate_dataset(connection: psycopg.Connection[TupleRow], sources: ClimateSources) -> int:
     rows = connection.execute(
         "SELECT id FROM sitesense.datasets WHERE metadata ->> 'import_key' = %s FOR UPDATE",
-        (_IMPORT_KEY,),
+        (_CLIMATE_IMPORT_KEY,),
     ).fetchall()
     if len(rows) > 1:
         raise ClimateImportError("Climate registry must have a unique import key.")
@@ -377,209 +441,220 @@ def _dataset(connection: psycopg.Connection[TupleRow], sources: ClimateSources) 
             "Climate Explorer ACIS daily station observations",
             str(sources.observations),
             "basic-app-climate-v1",
-            Jsonb({"import_key": _IMPORT_KEY, "status": "running"}),
+            Jsonb({"import_key": _CLIMATE_IMPORT_KEY, "status": "running"}),
         ),
     ).fetchone()
     assert row is not None
     return int(row[0])
 
 
-def seed_climate(
-    connection: psycopg.Connection[TupleRow], sources: ClimateSources = DEFAULT_CLIMATE_SOURCES
-) -> ClimateImportSummary:
-    """Replace this climate snapshot within the caller's transaction, without committing.
-
-    An inner savepoint rolls back climate changes on malformed rows. The same
-    transaction lock as Yelp import prevents either import from racing mappings.
-    Only businesses owned by the basic app cohort receive or lose station links.
-    """
-    try:
-        snapshot = _read_snapshot(sources)
-        connection.execute("SELECT pg_advisory_xact_lock(%s)", (_IMPORT_LOCK,))
-        with connection.transaction():
-            businesses = {
-                row[0]: (row[1], row[2])
-                for row in connection.execute(
-                    """SELECT business_id, latitude, longitude FROM sitesense.businesses
-                       WHERE dataset_id IN (SELECT id FROM sitesense.datasets
-                           WHERE metadata ->> 'import_key' = 'basic_app_businesses_v1')"""
-                )
-            }
-            mapping = _read_mapping(sources, snapshot, businesses)
-            dataset_id = _dataset(connection, sources)
-            station_ids = [station.weather_cell_id for station in snapshot.stations.values()]
-            conflicts = connection.execute(
-                """SELECT weather_cell_id FROM sitesense.weather_cells
+def _upsert_climate_stations(
+    connection: psycopg.Connection[TupleRow], stations: dict[str, _Station], dataset_id: int
+) -> None:
+    """Validate station ownership and upsert points within the caller's transaction."""
+    station_ids = [station.weather_cell_id for station in stations.values()]
+    conflicts = connection.execute(
+        """SELECT weather_cell_id FROM sitesense.weather_cells
                    WHERE weather_cell_id = ANY(%s)
                        AND (dataset_id <> %s OR source_kind <> 'acis_station')
                    UNION SELECT weather_cell_id FROM sitesense.station_weather_observations
                    WHERE weather_cell_id = ANY(%s) AND dataset_id <> %s LIMIT 1""",
-                (station_ids, dataset_id, station_ids, dataset_id),
-            ).fetchone()
-            if conflicts:
-                raise ClimateImportError(
-                    "Climate station IDs are already owned by another dataset."
-                )
-            for station in snapshot.stations.values():
-                connection.execute(
-                    """INSERT INTO sitesense.weather_cells
+        (station_ids, dataset_id, station_ids, dataset_id),
+    ).fetchone()
+    if conflicts:
+        raise ClimateImportError("Climate station IDs are already owned by another dataset.")
+    for station in stations.values():
+        connection.execute(
+            """INSERT INTO sitesense.weather_cells
                            (weather_cell_id, latitude, longitude, dataset_id,
                             source_kind, station_name)
                        VALUES (%s, %s, %s, %s, 'acis_station', %s)
                        ON CONFLICT (weather_cell_id) DO UPDATE SET latitude = EXCLUDED.latitude,
                            longitude = EXCLUDED.longitude, station_name = EXCLUDED.station_name""",
-                    (
-                        station.weather_cell_id,
-                        station.latitude,
-                        station.longitude,
-                        dataset_id,
-                        station.name,
-                    ),
-                )
-            connection.execute(
-                "DELETE FROM sitesense.station_weather_observations WHERE dataset_id = %s",
-                (dataset_id,),
-            )
-            with (
-                connection.cursor() as cursor,
-                cursor.copy(
-                    """COPY sitesense.station_weather_observations
+            (
+                station.weather_cell_id,
+                station.latitude,
+                station.longitude,
+                dataset_id,
+                station.name,
+            ),
+        )
+
+
+def _replace_climate_observations(
+    connection: psycopg.Connection[TupleRow],
+    sources: ClimateSources,
+    snapshot: ClimateSnapshot,
+    dataset_id: int,
+) -> None:
+    """Replace native rows and verify source hashes before remapping businesses."""
+    connection.execute(
+        "DELETE FROM sitesense.station_weather_observations WHERE dataset_id = %s",
+        (dataset_id,),
+    )
+    with (
+        connection.cursor() as cursor,
+        cursor.copy(
+            """COPY sitesense.station_weather_observations
                        (weather_cell_id, observation_date,
                        variable, value, unit, raw_value, flag, network_id, source_flag,
                        observation_time_local_standard, is_trace, dataset_id) FROM STDIN"""
-                ) as copy,
-            ):
-                for row in _observation_rows(sources, snapshot):
-                    copy.write_row((*row, dataset_id))
-            for name, path in (
-                ("observations", sources.observations),
-                ("station_manifest", sources.station_manifest),
-                ("business_mapping", sources.business_mapping),
-                ("scope_manifest", sources.scope_manifest),
-            ):
-                if _fingerprint(path) != snapshot.fingerprints[name]:
-                    raise ClimateImportError("Climate source files changed during import.")
-            connection.execute(
-                """UPDATE sitesense.businesses SET weather_cell_id = NULL WHERE dataset_id IN
-                   (SELECT id FROM sitesense.datasets
-                    WHERE metadata ->> 'import_key' = 'basic_app_businesses_v1')"""
-            )
-            with connection.cursor() as cursor:
-                cursor.executemany(
-                    "UPDATE sitesense.businesses SET weather_cell_id = %s WHERE business_id = %s",
-                    [(station_id, business_id) for business_id, station_id in mapping.items()],
-                )
-            summary = ClimateImportSummary(
-                len(snapshot.stations),
-                snapshot.manifest["rows"],
-                len(mapping),
-                len(businesses),
-                snapshot.manifest["missing_values"],
-            )
-            metadata = {
-                "import_key": _IMPORT_KEY,
-                "status": "complete",
-                "import_revision": uuid4().hex,
-                "source_kind": "acis_station",
-                "timestamp_policy": "source_station_local_standard",
-                "coverage": {
-                    "start_date": snapshot.start.isoformat(),
-                    "end_date": snapshot.end.isoformat(),
-                },
-                "variables": snapshot.manifest["variables"],
-                "source_fingerprints": snapshot.fingerprints,
-                "station_count": summary.station_count,
-                "observation_count": summary.observation_count,
-                "business_count": summary.business_count,
-                "mapped_business_count": summary.mapped_business_count,
-                "missing_value_count": summary.missing_value_count,
-                "spatial_mapping_coverage": len(mapping) / len(businesses) if businesses else 0.0,
-                "attribution": snapshot.manifest.get("attribution", ""),
-                "interpretation": snapshot.manifest.get("interpretation", ""),
-                "station_method": snapshot.scope_manifest.get("station_method", ""),
-            }
-            connection.execute(
-                """UPDATE sitesense.datasets SET name = %s, source_uri = %s, version = %s,
+        ) as copy,
+    ):
+        for row in _observation_rows(sources, snapshot):
+            copy.write_row((*row, dataset_id))
+    for name, path in (
+        ("observations", sources.observations),
+        ("station_manifest", sources.station_manifest),
+        ("business_mapping", sources.business_mapping),
+        ("scope_manifest", sources.scope_manifest),
+    ):
+        if fingerprint(path) != snapshot.fingerprints[name]:
+            raise ClimateImportError("Climate source files changed during import.")
+
+
+def _write_climate_metadata(
+    connection: psycopg.Connection[TupleRow],
+    sources: ClimateSources,
+    snapshot: ClimateSnapshot,
+    summary: ClimateImportSummary,
+    dataset_id: int,
+) -> None:
+    """Record climate provenance and mapping coverage without committing."""
+    metadata = {
+        "import_key": _CLIMATE_IMPORT_KEY,
+        "status": "complete",
+        "import_revision": uuid4().hex,
+        "source_kind": "acis_station",
+        "timestamp_policy": "source_station_local_standard",
+        "coverage": {
+            "start_date": snapshot.start.isoformat(),
+            "end_date": snapshot.end.isoformat(),
+        },
+        "variables": snapshot.manifest["variables"],
+        "source_fingerprints": snapshot.fingerprints,
+        "station_count": summary.station_count,
+        "observation_count": summary.observation_count,
+        "business_count": summary.business_count,
+        "mapped_business_count": summary.mapped_business_count,
+        "missing_value_count": summary.missing_value_count,
+        "spatial_mapping_coverage": summary.mapped_business_count / summary.business_count
+        if summary.business_count
+        else 0.0,
+        "attribution": snapshot.manifest.get("attribution", ""),
+        "interpretation": snapshot.manifest.get("interpretation", ""),
+        "station_method": snapshot.scope_manifest.get("station_method", ""),
+    }
+    connection.execute(
+        """UPDATE sitesense.datasets SET name = %s, source_uri = %s, version = %s,
                        metadata = %s WHERE id = %s""",
-                (
-                    "Climate Explorer ACIS daily station observations",
-                    str(sources.observations),
-                    "basic-app-climate-v1",
-                    Jsonb(metadata),
-                    dataset_id,
-                ),
-            )
-            connection.execute(
-                """UPDATE sitesense.datasets SET metadata = metadata || %s
+        (
+            "Climate Explorer ACIS daily station observations",
+            str(sources.observations),
+            "basic-app-climate-v1",
+            Jsonb(metadata),
+            dataset_id,
+        ),
+    )
+    connection.execute(
+        """UPDATE sitesense.datasets SET metadata = metadata || %s
                    WHERE metadata ->> 'import_key' = 'basic_app_businesses_v1'""",
-                (
-                    Jsonb(
-                        {
-                            "mapped_business_count": len(mapping),
-                            "spatial_mapping_coverage": metadata["spatial_mapping_coverage"],
-                            "weather_source_kind": "acis_station",
-                        }
-                    ),
-                ),
-            )
-            return summary
-    except ClimateImportError:
-        raise
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        KeyError,
-        IndexError,
-        AttributeError,
-        csv.Error,
-    ) as error:
-        raise ClimateImportError(
-            "Climate sources are unavailable or malformed; inspect local manifests."
-        ) from error
-
-
-def import_climate(sources: ClimateSources = DEFAULT_CLIMATE_SOURCES) -> ClimateImportSummary:
-    """Commit a local station snapshot and remap existing basic-app businesses atomically."""
-    with connect() as connection:
-        return seed_climate(connection, sources)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--observations", type=Path, default=DEFAULT_CLIMATE_SOURCES.observations)
-    parser.add_argument(
-        "--station-manifest", type=Path, default=DEFAULT_CLIMATE_SOURCES.station_manifest
+        (
+            Jsonb(
+                {
+                    "mapped_business_count": summary.mapped_business_count,
+                    "spatial_mapping_coverage": metadata["spatial_mapping_coverage"],
+                    "weather_source_kind": "acis_station",
+                }
+            ),
+        ),
     )
-    parser.add_argument(
-        "--business-mapping", type=Path, default=DEFAULT_CLIMATE_SOURCES.business_mapping
-    )
-    parser.add_argument(
-        "--scope-manifest", type=Path, default=DEFAULT_CLIMATE_SOURCES.scope_manifest
-    )
-    args = parser.parse_args(argv)
-    try:
-        summary = import_climate(
-            ClimateSources(
-                args.observations, args.station_manifest, args.business_mapping, args.scope_manifest
-            )
-        )
-    except (ConfigurationError, ClimateImportError) as error:
-        print(str(error), file=sys.stderr)
-        return 1
-    except psycopg.Error:
-        print(
-            "Climate import failed. Check connectivity, permissions and apply migrations.",
-            file=sys.stderr,
-        )
-        return 1
-    print(
-        f"Imported {summary.observation_count} daily values from {summary.station_count} stations "
-        f"({summary.missing_value_count} missing); mapped "
-        f"{summary.mapped_business_count}/{summary.business_count} basic-app businesses."
-    )
-    return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+@dataclass(frozen=True)
+class ClimateAdapter:
+    sources: ClimateSources = DEFAULT_CLIMATE_SOURCES
+
+    def read(self) -> ClimateSnapshot:
+        """Validate manifest scope and fingerprint the local station snapshot."""
+        try:
+            return _read_snapshot(self.sources)
+        except ClimateImportError:
+            raise
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            IndexError,
+            AttributeError,
+            csv.Error,
+        ) as error:
+            raise ClimateImportError(
+                "Climate sources are unavailable or malformed; inspect local manifests."
+            ) from error
+
+    def write(
+        self,
+        connection: psycopg.Connection[TupleRow],
+        snapshot: ClimateSnapshot,
+    ) -> ClimateImportSummary:
+        """Replace station rows and map basic-app businesses without committing.
+
+        An inner savepoint rolls back malformed rows. The shared transaction lock
+        prevents Yelp and climate imports from racing the business mapping.
+        """
+        if connection.autocommit:
+            raise ClimateImportError("Climate adapter requires a caller-owned transaction.")
+        if snapshot.sources != self.sources:
+            raise ClimateImportError("Prepared climate data does not match adapter configuration.")
+        sources = self.sources
+        try:
+            connection.execute("SELECT pg_advisory_xact_lock(%s)", (IMPORT_LOCK,))
+            with connection.transaction():
+                businesses = {
+                    row[0]: (row[1], row[2])
+                    for row in connection.execute(
+                        """SELECT business_id, latitude, longitude FROM sitesense.businesses
+                           WHERE dataset_id IN (SELECT id FROM sitesense.datasets
+                               WHERE metadata ->> 'import_key' = 'basic_app_businesses_v1')"""
+                    )
+                }
+                mapping = _read_mapping(sources, snapshot, businesses)
+                dataset_id = _climate_dataset(connection, sources)
+                _upsert_climate_stations(connection, snapshot.stations, dataset_id)
+                _replace_climate_observations(connection, sources, snapshot, dataset_id)
+                connection.execute(
+                    """UPDATE sitesense.businesses SET weather_cell_id = NULL WHERE dataset_id IN
+                       (SELECT id FROM sitesense.datasets
+                        WHERE metadata ->> 'import_key' = 'basic_app_businesses_v1')"""
+                )
+                with connection.cursor() as cursor:
+                    cursor.executemany(
+                        "UPDATE sitesense.businesses SET weather_cell_id = %s "
+                        "WHERE business_id = %s",
+                        [(station_id, business_id) for business_id, station_id in mapping.items()],
+                    )
+                summary = ClimateImportSummary(
+                    len(snapshot.stations),
+                    snapshot.manifest["rows"],
+                    len(mapping),
+                    len(businesses),
+                    snapshot.manifest["missing_values"],
+                )
+                _write_climate_metadata(connection, sources, snapshot, summary, dataset_id)
+                return summary
+        except ClimateImportError:
+            raise
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            IndexError,
+            AttributeError,
+            csv.Error,
+        ) as error:
+            raise ClimateImportError(
+                "Climate sources are unavailable or malformed; inspect local manifests."
+            ) from error

@@ -1,23 +1,19 @@
-"""Climate source integrity and optional isolated transactional PostgreSQL checks."""
+"""ACIS source validation and transactional station weather import checks."""
 
 import csv
 import gzip
 import hashlib
 import json
-import os
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit
-from uuid import uuid4
+from typing import Any
 
-import psycopg
 import pytest
-from psycopg import sql
 
-from sitesense import database, import_climate
-from sitesense.climate_stations import COLUMNS
-from sitesense.import_climate import ClimateImportError, ClimateSources
+from sitesense import database, import_data
+from sitesense.import_data import ClimateAdapter, ClimateImportError, ClimateSources, climate
+from sitesense.import_data.climate import COLUMNS
 
 _STATION = "USW00013739"
 
@@ -51,7 +47,7 @@ def _rewrite_mapping(sources: ClimateSources, rows: list[dict[str, str]]) -> Non
     sources.scope_manifest.write_text(json.dumps(manifest))
 
 
-def _sources(tmp_path: Path) -> ClimateSources:
+def _station_sources(tmp_path: Path) -> ClimateSources:
     sources = ClimateSources(
         tmp_path / "observations.csv.gz",
         tmp_path / "manifest.json",
@@ -183,9 +179,9 @@ def _sources(tmp_path: Path) -> ClimateSources:
 
 
 def test_native_rows_preserve_flagged_values_missing_trace_and_provenance(tmp_path: Path) -> None:
-    sources = _sources(tmp_path)
-    snapshot = import_climate._read_snapshot(sources)
-    rows = list(import_climate._observation_rows(sources, snapshot))
+    sources = _station_sources(tmp_path)
+    snapshot = climate._read_snapshot(sources)
+    rows = list(climate._observation_rows(sources, snapshot))
     assert len(rows) == 6
     assert rows[3] == (
         "acis_" + _STATION,
@@ -203,7 +199,7 @@ def test_native_rows_preserve_flagged_values_missing_trace_and_provenance(tmp_pa
     assert rows[4][3] is None and rows[4][5:7] == ("M", "M")
     assert rows[5][3] == 0.0 and rows[5][5:7] == ("T", "T") and rows[5][-1] is True
     assert rows[0][6] == " "
-    assert import_climate._read_mapping(sources, snapshot, {"a": (39.95, -75.16)}) == {
+    assert climate._read_mapping(sources, snapshot, {"a": (39.95, -75.16)}) == {
         "a": "acis_" + _STATION
     }
 
@@ -212,7 +208,7 @@ def test_native_rows_preserve_flagged_values_missing_trace_and_provenance(tmp_pa
 def test_incomplete_manifest_hash_units_and_coverage_are_rejected(
     tmp_path: Path, field: str
 ) -> None:
-    sources = _sources(tmp_path)
+    sources = _station_sources(tmp_path)
     manifest = json.loads(sources.station_manifest.read_text())
     if field == "status":
         manifest["status"] = "running"
@@ -224,14 +220,14 @@ def test_incomplete_manifest_hash_units_and_coverage_are_rejected(
         manifest["stations"][0]["coverage"]["tmax"]["requested_days"] = 1
     sources.station_manifest.write_text(json.dumps(manifest))
     with pytest.raises(ClimateImportError):
-        import_climate._read_snapshot(sources)
+        climate._read_snapshot(sources)
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "incomplete", "negative_rain", "wrong_unit"])
 def test_stream_rejects_duplicate_incomplete_and_invalid_daily_rows(
     tmp_path: Path, fault: str
 ) -> None:
-    sources = _sources(tmp_path)
+    sources = _station_sources(tmp_path)
     rows = _read_observations(sources)
     if fault == "duplicate":
         rows[-1] = rows[0]
@@ -243,12 +239,12 @@ def test_stream_rejects_duplicate_incomplete_and_invalid_daily_rows(
         rows[0]["unit"] = "degreeC"
     _rewrite_observations(sources, rows)
     with pytest.raises(ClimateImportError):
-        list(import_climate._observation_rows(sources, import_climate._read_snapshot(sources)))
+        list(climate._observation_rows(sources, climate._read_snapshot(sources)))
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "unknown_station", "coordinate", "hash"])
 def test_mapping_integrity_is_checked(tmp_path: Path, fault: str) -> None:
-    sources = _sources(tmp_path)
+    sources = _station_sources(tmp_path)
     with sources.business_mapping.open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     if fault == "duplicate":
@@ -262,86 +258,58 @@ def test_mapping_integrity_is_checked(tmp_path: Path, fault: str) -> None:
     if fault != "hash":
         _rewrite_mapping(sources, rows)
     with pytest.raises(ClimateImportError):
-        snapshot = import_climate._read_snapshot(sources)
-        import_climate._read_mapping(sources, snapshot, {"a": (39.95, -75.16)})
-
-
-def test_cli_redacts_database_errors(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    def fail(*args: object) -> None:
-        raise psycopg.OperationalError("postgresql://user:secret@host/db")
-
-    monkeypatch.setattr(import_climate, "import_climate", fail)
-    assert import_climate.main([]) == 1
-    error = capsys.readouterr().err
-    assert "apply migrations" in error
-    assert "secret" not in error and "postgresql://" not in error
+        snapshot = climate._read_snapshot(sources)
+        climate._read_mapping(sources, snapshot, {"a": (39.95, -75.16)})
 
 
 def test_mapping_must_include_current_basic_business_cohort(tmp_path: Path) -> None:
-    sources = _sources(tmp_path)
+    sources = _station_sources(tmp_path)
     with pytest.raises(ClimateImportError, match="omits imported"):
-        import_climate._read_mapping(
-            sources, import_climate._read_snapshot(sources), {"new_business": (39.95, -75.16)}
+        climate._read_mapping(
+            sources, climate._read_snapshot(sources), {"new_business": (39.95, -75.16)}
         )
 
 
 @pytest.fixture
-def isolated_climate_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    admin_url = os.environ.get("TEST_DATABASE_URL")
-    if not admin_url:
-        pytest.skip("Set TEST_DATABASE_URL to run isolated PostgreSQL climate tests.")
-    name = "sitesense_climate_test_" + uuid4().hex
-    parsed = urlsplit(admin_url)
-    query = urlencode([(key, value) for key, value in parse_qsl(parsed.query) if key != "dbname"])
-    url = parsed._replace(path=f"/{name}", query=query).geturl()
-    with psycopg.connect(admin_url, connect_timeout=5, autocommit=True) as admin:
-        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-        try:
-            monkeypatch.setenv("DATABASE_URL", url)
-            database.migrate()
-            with database.connect() as connection:
-                row = connection.execute(
-                    """INSERT INTO sitesense.datasets (name, source_uri, metadata)
-                       VALUES ('Basic businesses', 'local:test',
-                           '{"import_key":"basic_app_businesses_v1"}') RETURNING id"""
-                ).fetchone()
-                assert row is not None
-                business_dataset = row[0]
-                foreign = connection.execute(
-                    """INSERT INTO sitesense.datasets (name, source_uri)
-                       VALUES ('Unrelated', 'local:unrelated') RETURNING id"""
-                ).fetchone()
-                assert foreign is not None
-                connection.execute(
-                    """INSERT INTO sitesense.weather_cells
-                       (weather_cell_id, latitude, longitude, dataset_id)
-                       VALUES ('legacy', 39.95, -75.16, %s)""",
-                    (foreign[0],),
-                )
-                for bid, owner in (
-                    ("a", business_dataset),
-                    ("unmapped", business_dataset),
-                    ("foreign", foreign[0]),
-                ):
-                    connection.execute(
-                        """INSERT INTO sitesense.businesses (business_id, name, address, city,
-                           state, canonical_city, canonical_state, postal_code, latitude, longitude,
-                           categories, stars, review_count, is_open, weather_cell_id, dataset_id)
-                           VALUES (%s, %s, '', 'Philadelphia', 'PA', 'Philadelphia', 'PA', '19103',
-                               39.95, -75.16, '{}', 4.0, 1, true, 'legacy', %s)""",
-                        (bid, bid, owner),
-                    )
-                connection.execute(
-                    """INSERT INTO sitesense.business_activity_hourly (business_id, activity_date,
-                       hour_of_day, checkin_count, timestamp_policy, dataset_id)
-                       VALUES ('a', '2019-01-01', 9, 2, 'assumed_source_local', %s)""",
-                    (business_dataset,),
-                )
-            yield
-        finally:
-            admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+def isolated_climate_database(isolated_import_database: None) -> None:
+    with database.connect() as connection:
+        row = connection.execute(
+            """INSERT INTO sitesense.datasets (name, source_uri, metadata)
+               VALUES ('Basic businesses', 'local:test',
+                   '{"import_key":"basic_app_businesses_v1"}') RETURNING id"""
+        ).fetchone()
+        assert row is not None
+        business_dataset = row[0]
+        foreign = connection.execute(
+            """INSERT INTO sitesense.datasets (name, source_uri)
+               VALUES ('Unrelated', 'local:unrelated') RETURNING id"""
+        ).fetchone()
+        assert foreign is not None
+        connection.execute(
+            """INSERT INTO sitesense.weather_cells
+               (weather_cell_id, latitude, longitude, dataset_id)
+               VALUES ('legacy', 39.95, -75.16, %s)""",
+            (foreign[0],),
+        )
+        for bid, owner in (
+            ("a", business_dataset),
+            ("unmapped", business_dataset),
+            ("foreign", foreign[0]),
+        ):
+            connection.execute(
+                """INSERT INTO sitesense.businesses (business_id, name, address, city,
+                   state, canonical_city, canonical_state, postal_code, latitude, longitude,
+                   categories, stars, review_count, is_open, weather_cell_id, dataset_id)
+                   VALUES (%s, %s, '', 'Philadelphia', 'PA', 'Philadelphia', 'PA', '19103',
+                       39.95, -75.16, '{}', 4.0, 1, true, 'legacy', %s)""",
+                (bid, bid, owner),
+            )
+        connection.execute(
+            """INSERT INTO sitesense.business_activity_hourly (business_id, activity_date,
+               hour_of_day, checkin_count, timestamp_policy, dataset_id)
+               VALUES ('a', '2019-01-01', 9, 2, 'assumed_source_local', %s)""",
+            (business_dataset,),
+        )
 
 
 def _registry() -> dict[str, object]:
@@ -357,11 +325,11 @@ def _registry() -> dict[str, object]:
 def test_seed_reruns_without_duplication_and_preserves_other_data(
     isolated_climate_database: None, tmp_path: Path
 ) -> None:
-    sources = _sources(tmp_path)
-    first = import_climate.import_climate(sources)
+    sources = _station_sources(tmp_path)
+    first = import_data.import_climate(sources)
     revision = _registry()["import_revision"]
-    second = import_climate.import_climate(sources)
-    assert first == second == import_climate.ClimateImportSummary(1, 6, 1, 2, 1)
+    second = import_data.import_climate(sources)
+    assert first == second == import_data.ClimateImportSummary(1, 6, 1, 2, 1)
     assert _registry()["import_revision"] != revision
     assert _registry()["status"] == "complete"
     with database.connect() as connection:
@@ -386,14 +354,14 @@ def test_seed_reruns_without_duplication_and_preserves_other_data(
 def test_failed_copy_rolls_back_snapshot_mappings_and_revision(
     isolated_climate_database: None, tmp_path: Path
 ) -> None:
-    sources = _sources(tmp_path)
-    import_climate.import_climate(sources)
+    sources = _station_sources(tmp_path)
+    import_data.import_climate(sources)
     before = _registry()
     rows = _read_observations(sources)
     rows.pop()
     _rewrite_observations(sources, rows)
     with pytest.raises(ClimateImportError, match="incomplete"):
-        import_climate.import_climate(sources)
+        import_data.import_climate(sources)
     assert _registry() == before
     with database.connect() as connection:
         assert connection.execute(
@@ -407,20 +375,20 @@ def test_failed_copy_rolls_back_snapshot_mappings_and_revision(
 def test_source_change_during_copy_rolls_back_climate_seed(
     isolated_climate_database: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    sources = _sources(tmp_path)
-    import_climate.import_climate(sources)
+    sources = _station_sources(tmp_path)
+    import_data.import_climate(sources)
     before = _registry()
-    original_rows = import_climate._observation_rows
+    original_rows = climate._observation_rows
 
     def changed_source(
-        source: ClimateSources, snapshot: import_climate._Snapshot
+        source: ClimateSources, snapshot: climate.ClimateSnapshot
     ) -> Iterator[tuple[object, ...]]:
         yield from original_rows(source, snapshot)
         source.scope_manifest.write_text(source.scope_manifest.read_text() + "\n")
 
-    monkeypatch.setattr(import_climate, "_observation_rows", changed_source)
+    monkeypatch.setattr(climate, "_observation_rows", changed_source)
     with pytest.raises(ClimateImportError, match="changed during import"):
-        import_climate.import_climate(sources)
+        import_data.import_climate(sources)
     assert _registry() == before
     with database.connect() as connection:
         assert connection.execute(
@@ -431,10 +399,10 @@ def test_source_change_during_copy_rolls_back_climate_seed(
 def test_seed_participates_in_parent_transaction_and_protects_foreign_stations(
     isolated_climate_database: None, tmp_path: Path
 ) -> None:
-    sources = _sources(tmp_path)
+    sources = _station_sources(tmp_path)
     with pytest.raises(RuntimeError, match="abort parent"):
         with database.connect() as connection:
-            import_climate.seed_climate(connection, sources)
+            import_data.seed_climate(connection, sources)
             raise RuntimeError("abort parent")
     with database.connect() as connection:
         assert connection.execute(
@@ -448,9 +416,121 @@ def test_seed_participates_in_parent_transaction_and_protects_foreign_stations(
             ("acis_" + _STATION,),
         )
     with pytest.raises(ClimateImportError, match="owned by another"):
-        import_climate.import_climate(sources)
+        import_data.import_climate(sources)
     with database.connect() as connection:
         assert connection.execute("SELECT count(*) FROM sitesense.datasets").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT weather_cell_id FROM sitesense.businesses WHERE business_id = 'a'"
+        ).fetchone() == ("legacy",)
+
+
+@pytest.mark.parametrize("value", [None, "", " ", "M", " M ", -999, "-999", -9999])
+def test_recognized_missing_is_preserved(value: Any) -> None:
+    assert climate.climate_value(value) is None
+    assert climate.climate_value(0) == 0
+    assert climate.climate_value("0.0") == 0
+
+
+@pytest.mark.parametrize("value", [True, False, "unknown", "NaN", float("inf"), {}, []])
+def test_unrecognized_or_nonfinite_values_fail(value: Any) -> None:
+    with pytest.raises(ValueError):
+        climate.climate_value(value)
+
+
+def test_trace_zero_missing_and_accumulated_are_distinct() -> None:
+    zero = climate.parse_observation(["0.00", " ", 17, " ", 7], "pcpn")
+    trace = climate.parse_observation(["0.00", "T", 19, " ", 24], "pcpn")
+    missing = climate.parse_observation(["M", "M", 0, " ", -1], "pcpn")
+    accumulated = climate.parse_observation(["1.25", "A", 17, "E", 7], "pcpn")
+    assert zero.value == trace.value == 0 and not zero.is_trace and trace.is_trace
+    assert missing.value is None and missing.raw_value == "M" and missing.flag == "M"
+    assert accumulated.value == 1.25 and accumulated.flag == "A"
+    assert accumulated.source_flag == "E" and accumulated.observation_time == "7"
+    assert trace.network == "19", "CF6 overriding GHCND must remain identifiable"
+
+
+@pytest.mark.parametrize(
+    "element,variable",
+    [
+        (["NaN", " ", 17, " ", 24], "tmax"),
+        ([5, "M", 17, " ", 24], "tmax"),
+        ([1, "T", 17, " ", 24], "pcpn"),
+        ([0, "T", 17, " ", 24], "tmax"),
+        ([0, " ", {}, " ", 24], "pcpn"),
+        ([0, " ", 17], "pcpn"),
+    ],
+)
+def test_invalid_values_or_provenance_fail(element: Any, variable: str) -> None:
+    with pytest.raises(ValueError):
+        climate.parse_observation(element, variable)
+
+
+def test_adapter_uses_caller_transaction_without_committing(
+    isolated_climate_database: None, tmp_path: Path
+) -> None:
+    adapter = ClimateAdapter(_station_sources(tmp_path))
+    snapshot = adapter.read()
+    with pytest.raises(RuntimeError, match="abort parent"):
+        with database.connect() as connection:
+            summary = adapter.write(connection, snapshot)
+            assert summary == import_data.ClimateImportSummary(1, 6, 1, 2, 1)
+            assert connection.execute(
+                "SELECT count(*) FROM sitesense.station_weather_observations"
+            ).fetchone() == (6,)
+            assert connection.execute(
+                "SELECT weather_cell_id FROM sitesense.businesses WHERE business_id = 'a'"
+            ).fetchone() == ("acis_" + _STATION,)
+            raise RuntimeError("abort parent")
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM sitesense.station_weather_observations"
+        ).fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM sitesense.datasets").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT weather_cell_id FROM sitesense.businesses WHERE business_id = 'a'"
+        ).fetchone() == ("legacy",)
+
+
+def test_adapter_rejects_autocommit_before_writing(
+    isolated_climate_database: None, tmp_path: Path
+) -> None:
+    adapter = ClimateAdapter(_station_sources(tmp_path))
+    snapshot = adapter.read()
+    with database.connect() as connection:
+        connection.autocommit = True
+        with pytest.raises(ClimateImportError, match="caller-owned transaction"):
+            adapter.write(connection, snapshot)
+        assert connection.execute("SELECT count(*) FROM sitesense.datasets").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT count(*) FROM sitesense.station_weather_observations"
+        ).fetchone() == (0,)
+        assert connection.execute(
+            "SELECT weather_cell_id FROM sitesense.businesses WHERE business_id = 'a'"
+        ).fetchone() == ("legacy",)
+
+
+def test_adapter_rejects_snapshot_from_different_sources(
+    isolated_climate_database: None, tmp_path: Path
+) -> None:
+    sources = _station_sources(tmp_path)
+    snapshot = ClimateAdapter(sources).read()
+    other_observations = tmp_path / "other-observations.csv.gz"
+    other_observations.write_bytes(sources.observations.read_bytes())
+    adapter = ClimateAdapter(
+        ClimateSources(
+            other_observations,
+            sources.station_manifest,
+            sources.business_mapping,
+            sources.scope_manifest,
+        )
+    )
+    with database.connect() as connection:
+        with pytest.raises(ClimateImportError, match="does not match adapter configuration"):
+            adapter.write(connection, snapshot)
+        assert connection.execute("SELECT count(*) FROM sitesense.datasets").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT count(*) FROM sitesense.station_weather_observations"
+        ).fetchone() == (0,)
         assert connection.execute(
             "SELECT weather_cell_id FROM sitesense.businesses WHERE business_id = 'a'"
         ).fetchone() == ("legacy",)

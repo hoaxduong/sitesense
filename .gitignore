@@ -21,6 +21,7 @@ htmlcov/
 .streamlit/secrets.toml
 
 # Data and model artifacts stay local
+data/downloads/*
 data/raw/*
 data/interim/*
 data/processed/*
