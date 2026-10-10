@@ -24,7 +24,6 @@ htmlcov/
 # Data and model artifacts stay local
 data/raw/*
 data/interim/*
-data/processed/*
 models/*
 !**/.gitkeep
 
