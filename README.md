@@ -4,6 +4,8 @@ Weather-aware retail location assessment, built as one Python app with Streamlit
 
 Each screen remembers its own date range. Quick presets select the latest 7, 30, 90, or 365 imported days, or all available history; custom ranges can extend beyond imported coverage. Weather defaults to the latest 30 station report days independently of the historical activity period. Missing observations remain missing, and selecting dates outside activity coverage keeps business snapshots visible while hiding unavailable activity indicators.
 
+Weather observations also fills Census ZIP-area polygons by temperature or precipitation for the selected dates. Values represent mapped-station observations, with business mapping and valid-report coverage in tooltips. Missing values are gray. See [ZIP weather map data and boundaries](docs/zip-weather-map.md) for the aggregation and boundary preparation.
+
 ## Start development
 
 Requirements: Python 3.13, uv 0.12.23 or newer, and a running Docker engine with Compose v2 or newer. Install uv using the [official instructions](https://docs.astral.sh/uv/getting-started/installation/). Use `docker-compose` in place of `docker compose` if Compose is installed as a standalone command.

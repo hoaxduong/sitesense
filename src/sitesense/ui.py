@@ -5,12 +5,12 @@ import io
 from dataclasses import dataclass
 from datetime import date
 from statistics import mean
-from typing import cast
+from typing import Any, cast
 
 import psycopg
 import streamlit as st
 
-from sitesense import repository
+from sitesense import repository, zip_boundaries
 from sitesense.analytics import haversine_km, summarize_activity
 from sitesense.database import ConfigurationError
 from sitesense.models import (
@@ -23,6 +23,11 @@ from sitesense.models import (
     StationWeatherMonth,
     StationWeatherSummary,
     WeatherCell,
+)
+from sitesense.weather_map import (
+    WEATHER_MAP_METRICS,
+    build_weather_features,
+    render_weather_map,
 )
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -50,6 +55,11 @@ def _station_weather_monthly(
     cells: tuple[WeatherCell, ...], start_date: date, end_date: date, revision: str
 ) -> tuple[StationWeatherMonth, ...]:
     return repository.load_station_weather_monthly(cells, start_date, end_date)
+
+
+@st.cache_data(max_entries=1, show_spinner=False)
+def _zip_boundaries() -> dict[str, dict[str, Any]]:
+    return zip_boundaries.load_zip_boundaries()
 
 
 def render_setup(reason: str) -> None:
@@ -558,16 +568,111 @@ def _mean_weather_distance(context: ScreenContext, area_id: int) -> float | None
     return mean(distances) if distances else None
 
 
+def _render_zip_weather_map(
+    context: ScreenContext, observations: tuple[StationWeatherSummary, ...]
+) -> None:
+    if not observations:
+        return
+    try:
+        boundaries = _zip_boundaries()
+    except (zip_boundaries.BoundaryDataError, OSError):
+        st.caption("ZIP boundaries are unavailable.")
+        return
+    features_by_metric = {
+        key: build_weather_features(
+            boundaries, context.catalog, context.summaries, observations, context.filters, key
+        )
+        for key in WEATHER_MAP_METRICS
+    }
+    available = [
+        key
+        for key, features in features_by_metric.items()
+        if any(feature["properties"]["value"] is not None for feature in features)
+    ]
+    missing_boundaries = sum(
+        summary.area.postal_code not in boundaries for summary in context.summaries
+    )
+    boundary_note = (
+        "One eligible ZIP area has no Census boundary and is omitted."
+        if missing_boundaries == 1
+        else f"{missing_boundaries} eligible ZIP areas have no Census boundaries and are omitted."
+    )
+    if not available:
+        if missing_boundaries:
+            st.caption(boundary_note)
+        return
+    if st.session_state.get("weather_map_metric") not in available:
+        st.session_state["weather_map_metric"] = available[0]
+    selected = next(
+        (
+            summary.area.postal_code
+            for summary in context.summaries
+            if summary.area.id == st.session_state.get("weather_area")
+        ),
+        context.summaries[0].area.postal_code,
+    )
+    with st.container(border=True):
+        st.subheader("Weather by ZIP")
+        metric = cast(
+            str,
+            st.segmented_control(
+                "Map metric",
+                available,
+                format_func=WEATHER_MAP_METRICS.__getitem__,
+                required=True,
+                key="weather_map_metric",
+                persist_state="session",
+            ),
+        )
+        render_weather_map(features_by_metric[metric], metric, selected)
+        st.caption(
+            "Census ZCTA boundaries approximate ZIP areas. Hover for station values and "
+            "report coverage."
+        )
+        if missing_boundaries:
+            st.caption(boundary_note)
+
+
 def render_weather() -> None:
     context = _context()
     if context is None:
         return
-    summary = _selected_area(context, "weather_area")
     st.caption("Explore station observations and nearby weather mappings.")
     st.caption(
         f"Selected report dates: {context.filters.start_date:%Y-%m-%d} "
         f"to {context.filters.end_date:%Y-%m-%d}."
     )
+    eligible_ids = {summary.area.id for summary in context.summaries}
+    city_station_ids = {
+        business.weather_cell_id
+        for business in context.catalog.businesses
+        if business.area_id in eligible_ids and business.weather_cell_id is not None
+    }
+    city_stations = tuple(
+        cell
+        for cell in context.catalog.weather_cells
+        if cell.weather_cell_id in city_station_ids and cell.source_kind == "acis_station"
+    )
+    observations: tuple[StationWeatherSummary, ...] = ()
+    if city_stations:
+        try:
+            observations = _station_weather(
+                city_stations,
+                context.filters.start_date,
+                context.filters.end_date,
+                context.import_revision,
+            )
+        except (ConfigurationError, psycopg.Error):
+            st.info("Station observations are unavailable. Please retry the connection.")
+        else:
+            if not any(
+                item.temp_min_days or item.temp_max_days or item.precipitation_days
+                for item in observations
+            ):
+                st.info("No station observations are available for the selected dates.")
+            else:
+                _render_zip_weather_map(context, observations)
+    summary = _selected_area(context, "weather_area")
     station_ids = {
         business.weather_cell_id
         for business in _area_businesses(context, summary)
@@ -600,7 +705,11 @@ def render_weather() -> None:
         )
     stations = tuple(cell for cell in mapped_cells if cell.source_kind == "acis_station")
     if stations:
-        _render_station_weather(context, stations)
+        selected_ids = {cell.weather_cell_id for cell in stations}
+        selected_observations = tuple(
+            item for item in observations if item.weather_cell_id in selected_ids
+        )
+        _render_station_weather(context, stations, selected_observations)
     if mapped_cells:
         with st.container(border=True):
             st.subheader("Weather mapping")
@@ -625,17 +734,11 @@ def render_weather() -> None:
             )
 
 
-def _render_station_weather(context: ScreenContext, stations: tuple[WeatherCell, ...]) -> None:
-    try:
-        summaries = _station_weather(
-            stations,
-            context.filters.start_date,
-            context.filters.end_date,
-            context.import_revision,
-        )
-    except (ConfigurationError, psycopg.Error):
-        st.info("Station observations are unavailable. Please retry the connection.")
-        return
+def _render_station_weather(
+    context: ScreenContext,
+    stations: tuple[WeatherCell, ...],
+    summaries: tuple[StationWeatherSummary, ...],
+) -> None:
     usable = tuple(
         item
         for item in summaries

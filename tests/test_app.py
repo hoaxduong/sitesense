@@ -2,6 +2,7 @@
 
 import csv
 import io
+import json
 import re
 from dataclasses import replace
 from datetime import date
@@ -12,7 +13,7 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from sitesense import repository
+from sitesense import repository, zip_boundaries
 from sitesense.app import _activity, _catalog, _categories, _weather_coverage
 from sitesense.models import (
     ActivityRecord,
@@ -25,7 +26,7 @@ from sitesense.models import (
     StationWeatherSummary,
     WeatherCell,
 )
-from sitesense.ui import _station_weather, _station_weather_monthly
+from sitesense.ui import _station_weather, _station_weather_monthly, _zip_boundaries
 
 APP_FILE = Path(__file__).resolve().parents[1] / "app.py"
 PAGES = {
@@ -45,11 +46,13 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     _weather_coverage.clear()
     _station_weather.clear()
     _station_weather_monthly.clear()
+    _zip_boundaries.clear()
 
 
 @pytest.fixture
 def imported_data(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(repository, "get_import_revision", lambda: "test-import-revision")
+    monkeypatch.setattr(zip_boundaries, "load_zip_boundaries", lambda: {})
 
     def catalog(city: str, state: str, category: str) -> Catalog:
         areas = tuple(
@@ -645,6 +648,8 @@ def test_station_query_failure_does_not_expose_database_details(
     assert not app.exception
     assert any("Station observations are unavailable" in item.value for item in app.info)
     assert not any("secret" in item.value for item in app.info)
+    assert not app.get("deck_gl_json_chart")
+    assert not app.segmented_control
 
 
 def test_station_table_hides_empty_rows_and_unavailable_observation_columns(
@@ -931,3 +936,202 @@ def test_weather_relative_presets_follow_new_imports_but_custom_dates_stay_uncha
     assert app.date_input(key="weather_date_range").value == custom
     assert app.pills(key="weather_date_preset").value == "Custom"
     assert calls == ["first", "second", "third"]
+
+
+@pytest.fixture
+def city_weather_map(imported_data: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_catalog = repository.load_catalog
+
+    def catalog(city: str, state: str, category: str) -> Catalog:
+        source = original_catalog(city, state, category)
+        return replace(
+            source,
+            businesses=tuple(
+                replace(
+                    business,
+                    weather_cell_id=f"cell-{business.area_id}" if business.area_id <= 3 else None,
+                )
+                for business in source.businesses
+            ),
+            weather_cells=tuple(
+                WeatherCell(f"cell-{index}", 40.0, -75.0, "acis_station", f"Station {index}")
+                for index in range(1, 4)
+            ),
+        )
+
+    monkeypatch.setattr(repository, "load_catalog", catalog)
+    boundaries = {
+        f"{19000 + index}": {
+            "type": "Feature",
+            "properties": {"postal_code": f"{19000 + index}"},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [-75.2 + index * 0.02, 39.9],
+                        [-75.19 + index * 0.02, 39.9],
+                        [-75.19 + index * 0.02, 39.91],
+                        [-75.2 + index * 0.02, 39.91],
+                        [-75.2 + index * 0.02, 39.9],
+                    ]
+                ],
+            },
+        }
+        for index in range(1, 6)
+    }
+    monkeypatch.setattr(zip_boundaries, "load_zip_boundaries", lambda: boundaries)
+    monkeypatch.setattr(repository, "load_station_weather_monthly", lambda cells, start, end: ())
+
+
+def _weather_map_properties(app: AppTest) -> dict[str, dict[str, object]]:
+    payload = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
+    layer = next(layer for layer in payload["layers"] if layer["@@type"] == "GeoJsonLayer")
+    data = layer["data"]
+    features = data["features"] if isinstance(data, dict) else data
+    return {feature["properties"]["postal_code"]: feature["properties"] for feature in features}
+
+
+def test_weather_map_uses_city_observations_and_metric_changes_keep_one_cached_query(
+    city_weather_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def reports(
+        cells: tuple[WeatherCell, ...], start: date, end: date
+    ) -> tuple[StationWeatherSummary, ...]:
+        calls.append(tuple(cell.weather_cell_id for cell in cells))
+        return tuple(
+            StationWeatherSummary(
+                f"cell-{index}",
+                f"Station {index}",
+                (end - start).days + 1,
+                20,
+                20,
+                20,
+                10.0 + index,
+                20.0 + index,
+                float(index),
+                date(2026, 10, 9),
+            )
+            for index in range(1, 4)
+        )
+
+    monkeypatch.setattr(repository, "load_station_weather", reports)
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert "Weather by ZIP" in [item.value for item in app.subheader]
+    assert app.segmented_control(key="weather_map_metric").options == [
+        "Mean daily maximum °C",
+        "Mean daily minimum °C",
+        "Precipitation over valid reports (mm)",
+    ]
+    properties = _weather_map_properties(app)
+    assert {code: item["value"] for code, item in properties.items()} == {
+        "19001": 21.0,
+        "19002": 22.0,
+        "19003": 23.0,
+        "19004": None,
+        "19005": None,
+    }
+    assert not re.search(r"\breal\b", _visible_text(app), re.IGNORECASE)
+    app.segmented_control(key="weather_map_metric").set_value("precipitation").run()
+    assert not app.exception
+    properties = _weather_map_properties(app)
+    assert [properties[code]["value"] for code in ("19001", "19002", "19003")] == [1.0, 2.0, 3.0]
+    app.selectbox(key="weather_area").set_value(2).run()
+    assert not app.exception
+    observed = next(frame.value for frame in app.dataframe if "Station" in frame.value.columns)
+    assert observed["Station"].tolist() == ["Station 2"]
+    assert calls == [("cell-1", "cell-2", "cell-3")]
+
+
+def test_weather_map_keeps_zero_rainfall_and_hides_unavailable_metrics(
+    city_weather_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        repository,
+        "load_station_weather",
+        lambda cells, start, end: (
+            StationWeatherSummary(
+                "cell-1",
+                "Station 1",
+                (end - start).days + 1,
+                0,
+                0,
+                20,
+                None,
+                None,
+                0.0,
+                date(2026, 10, 9),
+            ),
+        ),
+    )
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert app.segmented_control(key="weather_map_metric").options == [
+        "Precipitation over valid reports (mm)"
+    ]
+    properties = _weather_map_properties(app)
+    assert properties["19001"]["value"] == 0.0
+    assert all(item["value"] is None for code, item in properties.items() if code != "19001")
+
+
+def test_weather_map_hides_when_reports_are_missing_and_keeps_selected_dates(
+    city_weather_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(repository, "load_station_weather", lambda cells, start, end: ())
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert not app.get("deck_gl_json_chart")
+    assert not app.segmented_control
+    assert "Weather by ZIP" not in [item.value for item in app.subheader]
+    assert app.date_input(key="weather_date_range").value == (date(2026, 9, 10), date(2026, 10, 9))
+    assert any("No station observations are available" in info.value for info in app.info)
+
+
+def test_weather_map_omits_missing_boundaries_without_fabricating_geometry(
+    city_weather_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    boundaries = zip_boundaries.load_zip_boundaries()
+    del boundaries["19005"]
+    monkeypatch.setattr(zip_boundaries, "load_zip_boundaries", lambda: boundaries)
+    monkeypatch.setattr(
+        repository,
+        "load_station_weather",
+        lambda cells, start, end: (
+            StationWeatherSummary(
+                "cell-1", "Station 1", 30, 20, 20, 20, 11.0, 21.0, 1.0, date(2026, 10, 9)
+            ),
+        ),
+    )
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert set(_weather_map_properties(app)) == {"19001", "19002", "19003", "19004"}
+    assert any(
+        "One eligible ZIP area has no Census boundary" in caption.value for caption in app.caption
+    )
+
+
+def test_weather_map_boundary_failure_is_safe_and_preserves_station_details(
+    city_weather_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail() -> dict[str, object]:
+        raise zip_boundaries.BoundaryDataError("secret source path and payload")
+
+    monkeypatch.setattr(zip_boundaries, "load_zip_boundaries", fail)
+    monkeypatch.setattr(
+        repository,
+        "load_station_weather",
+        lambda cells, start, end: (
+            StationWeatherSummary(
+                "cell-1", "Station 1", 30, 20, 20, 20, 11.0, 21.0, 1.0, date(2026, 10, 9)
+            ),
+        ),
+    )
+    app = _page(_app(), "weather_impact")
+    assert not app.exception
+    assert not app.get("deck_gl_json_chart")
+    assert not app.segmented_control
+    assert any(caption.value == "ZIP boundaries are unavailable." for caption in app.caption)
+    assert "secret" not in _visible_text(app)
+    assert any("Station" in frame.value.columns for frame in app.dataframe)

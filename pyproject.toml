@@ -5,6 +5,7 @@ description = "Streamlit research workspace for weather-aware retail location as
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "psycopg[binary]>=3.2,<4",
+    "pydeck>=0.9.3,<1",
     "streamlit>=1.54,<2",
 ]
 
