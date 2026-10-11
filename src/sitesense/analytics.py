@@ -61,6 +61,8 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def _previous_year(day: date) -> date:
     """Clamp February 29 to February 28 when shifting the interval endpoints."""
+    if day.year == date.min.year:
+        return day
     return day.replace(
         year=day.year - 1, day=min(day.day, calendar.monthrange(day.year - 1, day.month)[1])
     )

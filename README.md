@@ -1,6 +1,8 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. Scores, weather effects, and forecasts are labeled illustrations.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. The four populated screens show activity rankings, activity patterns, observed station weather, and area comparisons. Rankings use recorded check-ins; optional indicators and charts appear only when usable data exists. Model scores, inferred weather effects, review growth, AI advice, and forecasts remain hidden until applicable results are available.
+
+Each screen remembers its own date range. Quick presets select the latest 7, 30, 90, or 365 imported days, or all available history; custom ranges can extend beyond imported coverage. Weather defaults to the latest 30 station report days independently of the historical activity period. Missing observations remain missing, and selecting dates outside activity coverage keeps business snapshots visible while hiding unavailable activity indicators.
 
 ## Start development
 
@@ -69,6 +71,8 @@ recommend(
 
 If weather is omitted, the notebook uses complete observed ACIS values for the requested day and reports excluded areas with missing weather. The default weather model is selected between Poisson and HistGradientBoosting on 2018 validation; the calendar baseline remains a comparison even when it scores better. Philadelphia, Nashville and Tampa use dataset-limited county groups. Predictions describe a fixed historical business cohort, not new-store success; supplied weather is a scenario, and no 2026 activity labels are available to verify accuracy. See [POC execution and outputs](data/README.md#location-forecast-poc).
 
+The notebook's county-based historical cohorts differ from the app's city-only ZIP groups, and it exports saved predictions rather than a fitted model. These results stay in the research notebook; the app's forecast screen is hidden. See [the latest data and UI audit](docs/data-ui-audit.md) for coverage and remaining gaps.
+
 ## Validation
 
 ```sh
@@ -76,7 +80,7 @@ uv run --frozen python scripts/check.py
 uv run --frozen python scripts/smoke.py
 ```
 
-The check script validates the lockfile, runs Ruff, mypy and tests, and builds the Python package. AppTest verifies the actual Streamlit page and its research caveats. These commands work without a database; PostgreSQL integration tests run separately when `TEST_DATABASE_URL` is set, including in CI. The smoke test starts a headless server on a temporary port, checks `/_stcore/health`, and executes the app with AppTest. These checks do not cover browser WebSocket behavior or production deployment.
+The check script validates the lockfile, runs Ruff, mypy and tests, and builds the Python package. AppTest verifies the Streamlit pages, date filters, data coverage, and source notes. These commands work without a database; PostgreSQL integration tests run separately when `TEST_DATABASE_URL` is set, including in CI. The smoke test starts a headless server on a temporary port, checks `/_stcore/health`, and executes the app with AppTest. These checks do not cover browser WebSocket behavior or production deployment.
 
 Use `uv run --frozen ruff format .` to format Python code. `uv build` creates a source distribution and wheel; Streamlit runs from `app.py` and has no static frontend bundle. There is one root `.venv` and no Node.js toolchain or separate API server.
 

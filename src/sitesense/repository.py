@@ -1,8 +1,10 @@
-"""Parameterized PostgreSQL reads for the five basic application screens."""
+"""Parameterized PostgreSQL reads for populated application screens."""
 
+import calendar
 import hashlib
 import json
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from statistics import mean
@@ -15,6 +17,7 @@ from sitesense.models import (
     Catalog,
     DateCoverage,
     Filters,
+    StationWeatherMonth,
     StationWeatherSummary,
     WeatherCell,
 )
@@ -24,8 +27,37 @@ class DataUnavailableError(ValueError):
     """A completed basic-app import is required; this message contains no secrets."""
 
 
+def load_weather_coverage() -> DateCoverage | None:
+    """Report-date availability is independent of historical check-in coverage."""
+    with connect() as connection:
+        row = connection.execute(
+            """SELECT metadata -> 'coverage', metadata ->> 'timestamp_policy'
+               FROM sitesense.datasets
+               WHERE metadata ->> 'import_key' = 'basic_app_climate_v1'
+                 AND metadata ->> 'status' = 'complete'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        coverage = DateCoverage(
+            date.fromisoformat(row[0]["start_date"]),
+            date.fromisoformat(row[0]["end_date"]),
+            row[1],
+        )
+    except (KeyError, TypeError, ValueError):
+        raise DataUnavailableError(
+            "Reimport climate data to establish report-date coverage."
+        ) from None
+    if coverage.end_date < coverage.start_date or not isinstance(coverage.timestamp_policy, str):
+        raise DataUnavailableError("Reimport climate data to establish report-date coverage.")
+    return coverage
+
+
 def previous_year(day: date) -> date:
     """Use the matching calendar date, mapping leap day to February 28."""
+    if day.year == date.min.year:
+        return day
     try:
         return day.replace(year=day.year - 1)
     except ValueError:
@@ -261,15 +293,9 @@ def _summarize_station_weather(
     return tuple(summaries)
 
 
-def load_station_weather(
-    cells: tuple[WeatherCell, ...], start_date: date, end_date: date
-) -> tuple[StationWeatherSummary, ...]:
-    """Summarize each mapped station independently over provider report dates."""
-    if end_date < start_date:
-        raise ValueError("The end date must be on or after the start date.")
-    stations = tuple(cell for cell in cells if cell.source_kind == "acis_station")
-    if not stations:
-        return ()
+def _load_station_reports(
+    stations: tuple[WeatherCell, ...], start_date: date, end_date: date
+) -> tuple[_StationReport, ...]:
     with connect() as connection:
         rows = connection.execute(
             """SELECT weather_cell_id, observation_date, variable, value, unit,
@@ -279,6 +305,40 @@ def load_station_weather(
                ORDER BY weather_cell_id, observation_date, variable""",
             ([cell.weather_cell_id for cell in stations], start_date, end_date),
         ).fetchall()
+    return tuple(_StationReport(*row) for row in rows)
+
+
+def load_station_weather(
+    cells: tuple[WeatherCell, ...], start_date: date, end_date: date
+) -> tuple[StationWeatherSummary, ...]:
+    """Summarize each mapped station independently over provider report dates."""
+    if end_date < start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    stations = tuple(cell for cell in cells if cell.source_kind == "acis_station")
+    if not stations:
+        return ()
     return _summarize_station_weather(
-        stations, tuple(_StationReport(*row) for row in rows), start_date, end_date
+        stations, _load_station_reports(stations, start_date, end_date), start_date, end_date
     )
+
+
+def load_station_weather_monthly(
+    cells: tuple[WeatherCell, ...], start_date: date, end_date: date
+) -> tuple[StationWeatherMonth, ...]:
+    """Use the same report-quality policy for monthly charts and overall summaries."""
+    if end_date < start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    stations = tuple(cell for cell in cells if cell.source_kind == "acis_station")
+    if not stations:
+        return ()
+    by_month: dict[date, list[_StationReport]] = defaultdict(list)
+    for report in _load_station_reports(stations, start_date, end_date):
+        by_month[report.observation_date.replace(day=1)].append(report)
+    monthly = []
+    for month, reports in sorted(by_month.items()):
+        first = max(start_date, month)
+        last = min(end_date, month.replace(day=calendar.monthrange(month.year, month.month)[1]))
+        for summary in _summarize_station_weather(stations, tuple(reports), first, last):
+            if summary.latest_observed_date is not None:
+                monthly.append(StationWeatherMonth(month, summary))
+    return tuple(monthly)

@@ -70,8 +70,7 @@ def main() -> None:
                 for page, title in (
                     ("site_ranking", "Site ranking"),
                     ("customer_activity", "Customer activity"),
-                    ("weather_impact", "Weather impact"),
-                    ("demand_forecast", "Demand forecast"),
+                    ("weather_impact", "Weather observations"),
                     ("compare_sites", "Compare sites"),
                 ):
                     app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
@@ -81,7 +80,7 @@ def main() -> None:
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, five native pages, and safe database setup.")
+            print("Smoke passed: Streamlit server, four populated pages, and safe database setup.")
         finally:
             process.terminate()
             try:

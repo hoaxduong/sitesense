@@ -1,4 +1,4 @@
-"""Native Streamlit views with explicit real-data and illustrative-content labels."""
+"""Native Streamlit views populated from imported historical evidence."""
 
 import csv
 import io
@@ -13,28 +13,18 @@ import streamlit as st
 from sitesense import repository
 from sitesense.analytics import haversine_km, summarize_activity
 from sitesense.database import ConfigurationError
-from sitesense.mock_data import (
-    DIMENSION_LABELS,
-    FORECAST_SCENARIOS,
-    WEATHER_EVENTS,
-    MockAssessment,
-    forecast_example,
-    review_trend,
-    score_assessment,
-    stable_year_score,
-    weather_example,
-)
 from sitesense.models import (
     ActivityRecord,
     ActivitySummary,
     AreaSummary,
+    Business,
     Catalog,
     Filters,
+    StationWeatherMonth,
     StationWeatherSummary,
     WeatherCell,
 )
 
-MOCK_LABEL = "Illustrative mock content · No fitted model or measured weather effect"
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
@@ -55,6 +45,13 @@ def _station_weather(
     return repository.load_station_weather(cells, start_date, end_date)
 
 
+@st.cache_data(ttl=300, max_entries=32, show_spinner=False)
+def _station_weather_monthly(
+    cells: tuple[WeatherCell, ...], start_date: date, end_date: date, revision: str
+) -> tuple[StationWeatherMonth, ...]:
+    return repository.load_station_weather_monthly(cells, start_date, end_date)
+
+
 def render_setup(reason: str) -> None:
     messages = {
         "configuration": "Database not configured",
@@ -63,11 +60,11 @@ def render_setup(reason: str) -> None:
         "connection": "Database temporarily unavailable",
     }
     with st.container(border=True):
-        st.subheader("Connect the evidence", icon=":material/database:")
+        st.subheader("Connect your data", icon=":material/database:")
         st.info(messages[reason])
         st.markdown(
-            "Configure `DATABASE_URL` privately, apply the schema, then import the local dataset. "
-            "The app reads PostgreSQL; importing and migrating are explicit commands."
+            "Add a private database connection and load your dataset to explore locations. "
+            "Use the setup commands below to prepare your workspace."
         )
         st.code(
             "uv run --frozen --env-file .env python -m sitesense.database migrate\n"
@@ -76,11 +73,11 @@ def render_setup(reason: str) -> None:
         )
         if reason == "connection":
             st.caption("Check the PostgreSQL service and permissions, then retry.")
-        st.caption("No real panels are populated until imported data is available.")
+        st.caption("Connect your data to start exploring locations.")
         if st.button("Retry data connection", icon=":material/refresh:", key="retry_data"):
             st.cache_data.clear()
             st.rerun()
-    st.caption("Check-ins are an activity proxy. Weather scenarios do not prove causal effects.")
+    st.caption("Check-ins are an activity proxy. Weather observations do not prove causal effects.")
 
 
 def _context() -> ScreenContext | None:
@@ -94,20 +91,19 @@ def _context() -> ScreenContext | None:
     return context
 
 
-def _assessment(summary: AreaSummary, context: ScreenContext) -> MockAssessment:
-    weights = cast(dict[str, float], st.session_state["score_weights"])
-    return score_assessment(summary.area.id, context.filters.category, weights)
-
-
 def _selected_area(context: ScreenContext, key: str) -> AreaSummary:
     ids = [summary.area.id for summary in context.summaries]
     labels = {summary.area.id: summary.area.label for summary in context.summaries}
     if st.session_state.get(key) not in ids:
         st.session_state[key] = ids[0]
-    area_id = st.selectbox(
-        "Candidate area (source ZIP)", ids, format_func=labels.__getitem__, key=key
-    )
+    area_id = st.selectbox("ZIP area", ids, format_func=labels.__getitem__, key=key)
     return next(summary for summary in context.summaries if summary.area.id == area_id)
+
+
+def _area_businesses(context: ScreenContext, summary: AreaSummary) -> tuple[Business, ...]:
+    return tuple(
+        business for business in context.catalog.businesses if business.area_id == summary.area.id
+    )
 
 
 def _activity_summary(context: ScreenContext, summary: AreaSummary) -> ActivitySummary:
@@ -116,37 +112,64 @@ def _activity_summary(context: ScreenContext, summary: AreaSummary) -> ActivityS
     )
 
 
-def _number(value: float | int | None, precision: int = 1, suffix: str = "") -> str:
-    return "N/A" if value is None else f"{value:,.{precision}f}{suffix}"
+def _activity_coverage(context: ScreenContext) -> tuple[date, date] | None:
+    start = max(context.filters.start_date, context.catalog.coverage.start_date)
+    end = min(context.filters.end_date, context.catalog.coverage.end_date)
+    return (start, end) if start <= end else None
 
 
-def _percent(value: float | None, proportion: bool = False) -> str:
-    if value is None:
-        return "N/A"
+def _activity_coverage_notice(context: ScreenContext, covered: tuple[date, date] | None) -> None:
+    if covered is None:
+        st.info("No imported activity covers the selected date range.")
+    elif covered != (context.filters.start_date, context.filters.end_date):
+        st.caption(
+            f"Imported activity covers {covered[0]:%Y-%m-%d} to {covered[1]:%Y-%m-%d} "
+            "within this selection. There is no activity coverage outside those dates."
+        )
+
+
+def _number(value: float | int, precision: int = 1, suffix: str = "") -> str:
+    return f"{value:,.{precision}f}{suffix}"
+
+
+def _percent(value: float, proportion: bool = False) -> str:
     return f"{value * 100 if proportion else value:.1f}%"
 
 
-def _metrics(values: tuple[tuple[str, str], ...]) -> None:
+def _metrics(values: tuple[tuple[str, str | None], ...]) -> None:
+    available = [(label, value) for label, value in values if value is not None]
+    if not available:
+        return
     with st.container(horizontal=True):
-        for label, value in values:
+        for label, value in available:
             st.metric(label, value, border=True)
+
+
+def _available_columns(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Hide columns with no evidence while retaining measured zeros."""
+    if not rows:
+        return []
+    columns = [key for key in rows[0] if any(row.get(key) is not None for row in rows)]
+    return [{key: row.get(key) for key in columns} for row in rows]
 
 
 def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: str) -> None:
     if not rows:
         return
+    covered = _activity_coverage(context)
     scope: dict[str, object] = {
         "city": context.filters.city,
         "state": context.filters.state,
         "category": context.filters.category,
         "period_start": context.filters.start_date,
         "period_end": context.filters.end_date,
+        "activity_coverage_start": covered[0] if covered else None,
+        "activity_coverage_end": covered[1] if covered else None,
         "radius_km": context.filters.radius_km,
         "checkin_timestamp_policy": context.catalog.coverage.timestamp_policy,
-        "real_source": "Imported Yelp archive; business snapshot; check-ins are an activity proxy",
-        "mock_fields_notice": "Fields ending in _mock are illustrative, not measured or predicted",
+        "data_source": "Imported Yelp archive; business snapshot; check-ins are an activity proxy",
     }
-    exports = [dict(scope, **row) for row in rows]
+    exports = _available_columns([dict(scope, **row) for row in rows])
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=list(exports[0]))
     writer.writeheader()
@@ -161,23 +184,49 @@ def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: s
     )
 
 
-def _area_export(summary: AreaSummary, assessment: MockAssessment) -> dict[str, object]:
+def _area_export(summary: AreaSummary, context: ScreenContext) -> dict[str, object]:
+    covered = _activity_coverage(context)
     return {
         "area_id": summary.area.id,
         "postal_code": summary.area.postal_code,
         "area_label": summary.area.display_name,
         "listed_category_businesses": summary.business_count,
-        "recorded_checkins": summary.checkin_count,
-        "average_weekly_checkins": summary.average_weekly_checkins,
-        "yoy_percent": summary.yoy_percent,
+        "recorded_checkins": summary.checkin_count if covered else None,
+        "average_weekly_checkins": summary.average_weekly_checkins if covered else None,
+        "yoy_percent": summary.yoy_percent if covered else None,
         "snapshot_mean_rating": summary.average_rating,
-        "nearby_listed_category_businesses": summary.nearby_business_count,
-        "spatial_weather_mapping_rate": summary.weather_match_rate,
-        "score_mock": assessment.score,
-        "weather_sensitivity_mock": assessment.weather_sensitivity,
-        "review_growth_percent_mock": assessment.review_growth_percent,
-        **{f"{dimension.key}_score_mock": dimension.score for dimension in assessment.dimensions},
-        **{f"{dimension.key}_weight_mock": dimension.weight for dimension in assessment.dimensions},
+        "nearby_listed_category_businesses": (
+            summary.nearby_business_count
+            if summary.area.latitude is not None and summary.area.longitude is not None
+            else None
+        ),
+        "spatial_weather_mapping_rate": (
+            summary.weather_match_rate if context.catalog.weather_cells else None
+        ),
+    }
+
+
+def _indicator_row(summary: AreaSummary, context: ScreenContext) -> dict[str, object]:
+    covered = _activity_coverage(context)
+    return {
+        "Area / ZIP": summary.area.label,
+        "Listed businesses": summary.business_count,
+        "Recorded check-ins": summary.checkin_count if covered else None,
+        "Weekly check-ins": round(summary.average_weekly_checkins, 1) if covered else None,
+        "YoY": (
+            _percent(summary.yoy_percent) if covered and summary.yoy_percent is not None else None
+        ),
+        "Snapshot rating": summary.average_rating,
+        "Nearby category businesses": (
+            summary.nearby_business_count
+            if summary.area.latitude is not None and summary.area.longitude is not None
+            else None
+        ),
+        "Spatial weather mapping": (
+            _percent(summary.weather_match_rate, True)
+            if context.catalog.weather_cells and summary.weather_match_rate is not None
+            else None
+        ),
     }
 
 
@@ -185,116 +234,135 @@ def render_ranking() -> None:
     context = _context()
     if context is None:
         return
-    st.caption("Real evidence · Source ZIP areas with at least five listed category businesses")
-    mapped = sum(business.weather_cell_id is not None for business in context.catalog.businesses)
+    covered = _activity_coverage(context)
+    st.caption("Compare ZIP areas with at least five listed businesses")
+    _activity_coverage_notice(context, covered)
+    weather_ids = {cell.weather_cell_id for cell in context.catalog.weather_cells}
+    mapped = sum(business.weather_cell_id in weather_ids for business in context.catalog.businesses)
     _metrics(
         (
             ("Candidate ZIP areas", str(len(context.summaries))),
             ("Listed category businesses", f"{len(context.catalog.businesses):,}"),
-            ("Recorded check-ins", f"{sum(s.checkin_count for s in context.summaries):,}"),
-            ("Spatial weather mapping", _percent(mapped / len(context.catalog.businesses), True)),
+            (
+                "Recorded check-ins",
+                f"{sum(s.checkin_count for s in context.summaries):,}" if covered else None,
+            ),
+            (
+                "Spatial weather mapping",
+                _percent(mapped / len(context.catalog.businesses), True)
+                if weather_ids and context.catalog.businesses
+                else None,
+            ),
         )
     )
+    if covered:
+        st.caption("Check-in total covers eligible candidates within imported activity coverage.")
     st.caption(
-        "Check-in total covers eligible candidates. Business/mapping totals cover the imported "
-        "city/category cohort. Mapping is not the percentage of days with weather observations."
+        "Business totals cover the selected city and category. Weather mapping counts "
+        "businesses, not days with observations."
     )
-    with st.expander("Illustrative scoring weights", expanded=False):
-        st.caption(MOCK_LABEL)
-        stored = cast(dict[str, float], st.session_state["score_weights"])
-        weights: dict[str, float] = {}
-        for column, (key, label) in zip(st.columns(5), DIMENSION_LABELS, strict=True):
-            with column:
-                weights[key] = float(
-                    st.number_input(
-                        label,
-                        min_value=0.0,
-                        max_value=100.0,
-                        value=stored[key],
-                        step=5.0,
-                        key=f"weight_{key}",
-                    )
-                )
-        st.session_state["score_weights"] = weights
-        st.caption("Weights are normalized to 100%. These dimensions are illustrative examples.")
-    assessments = {summary.area.id: _assessment(summary, context) for summary in context.summaries}
-    if sum(weights.values()) == 0:
-        st.warning("Set at least one scoring weight above zero to calculate an illustrative score.")
     ranked = sorted(
         context.summaries,
-        key=lambda summary: assessments[summary.area.id].score or 0,
-        reverse=True,
+        key=lambda summary: (
+            -summary.checkin_count if covered else 0,
+            summary.area.postal_code,
+        ),
     )
-    with st.container(border=True):
-        st.subheader("Candidate map")
-        points = [
-            {
-                "latitude": summary.area.latitude,
-                "longitude": summary.area.longitude,
-                "businesses": summary.business_count,
-            }
-            for summary in ranked
-            if summary.area.latitude is not None and summary.area.longitude is not None
-        ]
-        if points:
+    points = [
+        {
+            "latitude": summary.area.latitude,
+            "longitude": summary.area.longitude,
+            "businesses": summary.business_count,
+        }
+        for summary in ranked
+        if summary.area.latitude is not None and summary.area.longitude is not None
+    ]
+    if points:
+        with st.container(border=True):
+            st.subheader("Candidate map")
             st.map(
                 points, size=100, height=320, alt="Representative centers of candidate ZIP areas"
             )
-        else:
-            st.info("These source ZIP areas have no usable representative coordinates.")
-        st.caption(
-            "Markers use mean coordinates of imported businesses, not ZIP polygons or specific "
-            "available properties. Nearby counts use the selected radius and imported cohort."
-        )
+            st.caption(
+                "Map pins show the average location of listed businesses in each ZIP, not "
+                "available properties. Nearby counts use the selected radius and category."
+            )
     with st.container(border=True):
         st.subheader("Area ranking")
-        st.caption("Real activity and snapshot indicators · Score and sensitivity are mock content")
-        st.dataframe(
-            [
-                {
-                    "Area / ZIP": summary.area.label,
-                    "Score (mock)": assessments[summary.area.id].score,
-                    "Weekly check-ins": round(summary.average_weekly_checkins, 1),
-                    "YoY": _percent(summary.yoy_percent),
-                    "Snapshot rating": summary.average_rating,
-                    "Nearby category businesses": summary.nearby_business_count,
-                    "Weather sensitivity (mock)": assessments[summary.area.id].weather_sensitivity,
-                }
-                for summary in ranked
-            ],
-            hide_index=True,
-            alt="ZIP area ranking with real indicators and labeled mock scores",
-        )
         st.caption(
-            "YoY is N/A unless the full matching prior interval is imported with a positive count. "
-            "Ratings and open status are snapshot attributes, not historical measurements."
+            "Ordered by recorded check-ins within imported activity coverage; ties use source ZIP."
+            if covered
+            else "Business snapshots ordered by source ZIP."
         )
-        _csv_download([_area_export(s, assessments[s.area.id]) for s in ranked], context, "ranking")
+        st.dataframe(
+            _available_columns([_indicator_row(summary, context) for summary in ranked]),
+            hide_index=True,
+            alt=(
+                "ZIP areas ordered by recorded activity with snapshot indicators"
+                if covered
+                else "Imported business snapshot indicators by ZIP area"
+            ),
+        )
+        if covered:
+            st.caption(
+                "YoY compares daily activity with the matching prior interval, when fully imported "
+                "with a positive prior count."
+            )
+        st.caption("Ratings and operating status describe the source snapshot.")
+        _csv_download([_area_export(summary, context) for summary in ranked], context, "ranking")
     with st.container(border=True):
         st.subheader("Why this area?")
         summary = _selected_area(context, "ranking_area")
-        assessment = assessments[summary.area.id]
-        st.caption(MOCK_LABEL)
-        st.bar_chart(
-            [
-                {"Factor": dimension.label, "Contribution (mock)": dimension.contribution}
-                for dimension in assessment.dimensions
-            ],
-            x="Factor",
-            y="Contribution (mock)",
-            horizontal=True,
-            alt="Illustrative weighted factor contributions for the selected area",
+        members = _area_businesses(context, summary)
+        description = (
+            f"**{summary.area.label}** contains **{summary.business_count:,}** listed "
+            f"{context.filters.category_label} businesses"
         )
-        st.markdown(assessment.explanation)
-        if st.button(
-            "Show example AI explanation", icon=":material/auto_awesome:", key="explain_mock"
-        ):
-            st.info(
-                f"Mock explanation · {summary.area.label} has "
-                f"{summary.business_count} listed {context.filters.category_label} businesses and "
-                f"{summary.checkin_count:,} recorded check-ins in this interval. "
-                "The illustrative score shows how a future assessment could combine factors. "
-                "No local AI service is connected."
+        if covered:
+            description += (
+                f" and **{summary.checkin_count:,}** recorded check-ins within imported "
+                "activity coverage"
+            )
+        st.markdown(description + ".")
+        _metrics(
+            (
+                (
+                    "Average weekly check-ins",
+                    _number(summary.average_weekly_checkins) if covered else None,
+                ),
+                (
+                    "Snapshot mean rating",
+                    _number(summary.average_rating) if summary.average_rating is not None else None,
+                ),
+                ("Listed open in snapshot", f"{sum(business.is_open for business in members):,}"),
+                (
+                    "Snapshot review count",
+                    f"{sum(business.review_count for business in members):,}",
+                ),
+            )
+        )
+        if covered:
+            st.caption("Recorded activity supports historical comparison within imported coverage.")
+        st.caption(
+            "Listed business counts, ratings, reviews "
+            "and operating status describe the imported snapshot; they do not establish "
+            "site viability."
+        )
+        if members:
+            st.dataframe(
+                _available_columns(
+                    [
+                        {
+                            "Listed business": business.name,
+                            "Snapshot rating": business.stars,
+                            "Snapshot reviews": business.review_count,
+                            "Open in snapshot": business.is_open,
+                        }
+                        for business in sorted(members, key=lambda business: business.name)
+                    ]
+                ),
+                hide_index=True,
+                alt="Imported business snapshot for the selected ZIP area",
             )
 
 
@@ -304,6 +372,7 @@ def _monthly_rows(activity: ActivitySummary, label: str) -> list[dict[str, objec
         for index, (month, value) in enumerate(
             zip(MONTHS, activity.monthly_index, strict=True), start=1
         )
+        if value is not None
     ]
 
 
@@ -312,111 +381,163 @@ def render_activity() -> None:
     if context is None:
         return
     summary = _selected_area(context, "activity_area")
+    covered = _activity_coverage(context)
+    _activity_coverage_notice(context, covered)
+    if covered is None:
+        with st.container(border=True):
+            st.subheader("Area summary")
+            st.dataframe(
+                _available_columns(
+                    [
+                        {
+                            "Area / ZIP": summary.area.label,
+                            "Listed businesses": summary.business_count,
+                            "Snapshot mean rating": summary.average_rating,
+                        }
+                    ]
+                ),
+                hide_index=True,
+                alt="Imported business snapshot for the selected ZIP area",
+            )
+        st.caption("Business counts and ratings describe the imported snapshot.")
+        return
     activity = _activity_summary(context, summary)
-    st.caption("Real recorded activity · Check-ins are an activity proxy, not customer counts")
+    st.caption("Explore recorded check-in activity across your selected dates.")
+    st.caption("Check-ins are an activity proxy, not customer counts or revenue.")
     if not activity.checkin_count:
         st.info("No recorded check-ins for this ZIP area in the selected interval.")
     _metrics(
         (
+            ("Recorded check-ins", f"{activity.checkin_count:,}"),
             ("Average weekly check-ins", _number(activity.average_weekly_checkins)),
-            ("Busiest weekday", activity.busiest_day or "N/A"),
+            ("Busiest weekday", activity.busiest_day),
             (
                 "Peak hour (source labels)",
-                "N/A" if activity.peak_hour is None else f"{activity.peak_hour:02d}:00",
+                f"{activity.peak_hour:02d}:00" if activity.peak_hour is not None else None,
             ),
-            ("Seasonality ratio", _number(activity.seasonality_ratio, 2, "×")),
+            (
+                "Seasonality ratio",
+                _number(activity.seasonality_ratio, 2, "×")
+                if activity.seasonality_ratio is not None
+                else None,
+            ),
         )
     )
     st.caption(
-        "Weekly average divides the selected calendar days by seven, including zero-activity dates "
-        "inside imported coverage. Seasonality compares maximum/minimum monthly daily averages; "
-        "it needs all 12 month labels and complete boundary months. A zero denominator is N/A."
+        "Weekly average divides covered calendar days by seven, including zero-activity dates "
+        "inside imported coverage. Seasonality compares maximum/minimum monthly daily averages "
+        "when all 12 months and complete boundary months are available with positive activity."
     )
-    view = st.segmented_control(
-        "Activity view",
-        ["Hour", "Month", "Year"],
-        default="Hour",
-        required=True,
-        key="activity_view",
-    )
-    with st.container(border=True):
-        if view == "Hour":
-            st.subheader("Hour-by-weekday activity")
-            st.vega_lite_chart(
-                [
-                    {"Weekday": WEEKDAYS[day], "Hour": hour, "Recorded check-ins": count}
-                    for day, values in enumerate(activity.heatmap)
-                    for hour, count in enumerate(values)
-                ],
-                {
-                    "mark": "rect",
-                    "encoding": {
-                        "x": {"field": "Hour", "type": "ordinal"},
-                        "y": {"field": "Weekday", "type": "ordinal", "sort": list(WEEKDAYS)},
-                        "color": {"field": "Recorded check-ins", "type": "quantitative"},
-                        "tooltip": [
-                            {"field": "Weekday"},
-                            {"field": "Hour"},
-                            {"field": "Recorded check-ins"},
-                        ],
-                    },
-                },
-                height=260,
-                alt="Recorded check-ins by source-local weekday and hour",
-            )
-            st.caption(
-                "Source timestamps are interpreted as unverified local calendar labels. "
-                "No conversion to a verified timezone has been applied."
-            )
-        elif view == "Month":
-            st.subheader("Monthly seasonality")
-            st.line_chart(
-                _monthly_rows(activity, summary.area.label),
-                x="Month",
-                y="Activity index",
-                alt="Monthly activity index normalized by covered calendar days",
-            )
-            st.caption(
-                "Index 100 = this area's average daily activity across the selected interval. "
-                "Each month's rate divides its check-ins by selected calendar days in that month."
-            )
-        else:
-            st.subheader("Annual share of imported metro check-ins")
-            st.bar_chart(
-                [
+    monthly = _monthly_rows(activity, summary.area.label)
+    annual = [
+        {"Year": str(year), "Area share (%)": share * 100}
+        for year, share in activity.annual_share
+        if share is not None
+    ]
+    if activity.checkin_count:
+        options = ["Hour"] + (["Month"] if monthly else []) + (["Year"] if annual else [])
+        if st.session_state.get("activity_view") not in options:
+            st.session_state["activity_view"] = options[0]
+        view = st.segmented_control("Activity view", options, required=True, key="activity_view")
+        with st.container(border=True):
+            if view == "Hour":
+                st.subheader("Hour-by-weekday activity")
+                st.vega_lite_chart(
+                    [
+                        {"Weekday": WEEKDAYS[day], "Hour": hour, "Recorded check-ins": count}
+                        for day, values in enumerate(activity.heatmap)
+                        for hour, count in enumerate(values)
+                    ],
                     {
-                        "Year": str(year),
-                        "Area share (%)": share * 100 if share is not None else None,
-                    }
-                    for year, share in activity.annual_share
-                ],
-                x="Year",
-                y="Area share (%)",
-                alt="Selected ZIP area share of imported city/category check-ins",
-            )
-            st.caption(
-                "Denominator: all imported city/category check-ins during each selected year's "
-                "portion of this interval, including areas below the candidate threshold. "
-                "N/A if zero."
-            )
+                        "mark": "rect",
+                        "encoding": {
+                            "x": {"field": "Hour", "type": "ordinal"},
+                            "y": {"field": "Weekday", "type": "ordinal", "sort": list(WEEKDAYS)},
+                            "color": {"field": "Recorded check-ins", "type": "quantitative"},
+                            "tooltip": [
+                                {"field": "Weekday"},
+                                {"field": "Hour"},
+                                {"field": "Recorded check-ins"},
+                            ],
+                        },
+                    },
+                    height=260,
+                    alt="Recorded check-ins by source-local weekday and hour",
+                )
+                st.caption(
+                    "Source timestamps are interpreted as unverified local calendar labels. "
+                    "No conversion to a verified timezone has been applied."
+                )
+            elif view == "Month":
+                st.subheader("Monthly activity index")
+                st.line_chart(
+                    monthly,
+                    x="Month",
+                    y="Activity index",
+                    alt="Monthly activity index normalized by covered calendar days",
+                )
+                st.caption(
+                    "Index 100 = this area's average daily activity across the selected interval. "
+                    "Each month's rate divides check-ins by selected calendar days in that month."
+                )
+            else:
+                st.subheader("Annual share of imported metro check-ins")
+                st.bar_chart(
+                    annual,
+                    x="Year",
+                    y="Area share (%)",
+                    alt="Selected ZIP area share of imported city/category check-ins",
+                )
+                st.caption(
+                    "Denominator: all imported city/category check-ins during each selected year's "
+                    "portion of this interval, including areas below the candidate threshold."
+                )
+        if activity.weekly_activity:
+            with st.container(border=True):
+                st.subheader("Historical weekly activity")
+                st.line_chart(
+                    [
+                        {"Week": day.isoformat(), "Recorded check-ins": count}
+                        for day, count in activity.weekly_activity
+                    ],
+                    x="Week",
+                    y="Recorded check-ins",
+                    alt="Historical recorded check-ins by Monday week bucket",
+                )
+                st.caption(
+                    "Weeks start on Monday. Boundary weeks may be partial; zero weeks are "
+                    "included only inside imported coverage."
+                )
     with st.container(border=True):
         st.subheader("Area summary")
         st.dataframe(
-            [
-                {
-                    "Area / ZIP": summary.area.label,
-                    "Listed businesses": summary.business_count,
-                    "Recorded check-ins": activity.checkin_count,
-                    "Weekday share": _percent(activity.weekday_share, True),
-                    "Weekend share": _percent(activity.weekend_share, True),
-                    "Peak month": "N/A"
-                    if activity.peak_month is None
-                    else MONTHS[activity.peak_month - 1],
-                    "Snapshot mean rating": summary.average_rating,
-                }
-            ],
+            _available_columns(
+                [
+                    {
+                        "Area / ZIP": summary.area.label,
+                        "Listed businesses": summary.business_count,
+                        "Recorded check-ins": activity.checkin_count,
+                        "Weekday share": (
+                            _percent(activity.weekday_share, True)
+                            if activity.weekday_share is not None
+                            else None
+                        ),
+                        "Weekend share": (
+                            _percent(activity.weekend_share, True)
+                            if activity.weekend_share is not None
+                            else None
+                        ),
+                        "Peak month": (
+                            MONTHS[activity.peak_month - 1]
+                            if activity.peak_month is not None
+                            else None
+                        ),
+                        "Snapshot mean rating": summary.average_rating,
+                    }
+                ]
+            ),
             hide_index=True,
-            alt="Real activity summary for the selected area",
+            alt="Recorded activity and snapshot summary for the selected ZIP area",
         )
 
 
@@ -442,279 +563,265 @@ def render_weather() -> None:
     if context is None:
         return
     summary = _selected_area(context, "weather_area")
+    st.caption("Explore station observations and nearby weather mappings.")
+    st.caption(
+        f"Selected report dates: {context.filters.start_date:%Y-%m-%d} "
+        f"to {context.filters.end_date:%Y-%m-%d}."
+    )
     station_ids = {
         business.weather_cell_id
-        for business in context.catalog.businesses
-        if business.area_id == summary.area.id
+        for business in _area_businesses(context, summary)
+        if business.weather_cell_id is not None
     }
-    stations = tuple(
-        cell
-        for cell in context.catalog.weather_cells
-        if cell.weather_cell_id in station_ids and cell.source_kind == "acis_station"
+    mapped_cells = tuple(
+        cell for cell in context.catalog.weather_cells if cell.weather_cell_id in station_ids
     )
-    if stations:
-        _render_station_weather(context, stations)
-    with st.container(horizontal=True):
-        event = st.selectbox("Weather event", WEATHER_EVENTS, key="weather_event")
-        rainfall = st.slider(
-            "Rainfall threshold (mm, mock)", 1.0, 30.0, 10.0, step=1.0, key="rainfall"
-        )
-        window = st.slider("Baseline window (days, mock)", 7, 42, 14, step=7, key="baseline_window")
-    example = weather_example(summary.area.id, context.filters.category, event, rainfall, window)
-    effect = example.selected_event
-    st.caption(MOCK_LABEL)
+    distance = _mean_weather_distance(context, summary.area.id)
     _metrics(
         (
-            ("Event days (mock)", str(effect.event_days)),
-            ("Activity difference (mock)", _percent(effect.effect_percent)),
-            ("95% CI (mock)", f"{effect.ci_low:.1f}% to {effect.ci_high:.1f}%"),
-            ("Reliability (mock)", effect.reliability),
+            (
+                "Average station distance"
+                if context.catalog.weather_source == "acis_station"
+                else "Average weather-point distance",
+                _number(distance, 1, " km") if distance is not None else None,
+            ),
+            (
+                "Spatial weather mapping",
+                _percent(summary.weather_match_rate, True)
+                if context.catalog.weather_cells and summary.weather_match_rate is not None
+                else None,
+            ),
         )
     )
-    st.caption(
-        f"p-value (mock): {effect.p_value:.3f}. This is illustrative, not an inference result."
-    )
-    st.metric(
-        "Mean mapped weather-station distance (real)"
-        if context.catalog.weather_source == "acis_station"
-        else "Mean mapped weather-cell distance (real)",
-        _number(_mean_weather_distance(context, summary.area.id), 1, " km"),
-        border=True,
-    )
-    st.caption(
-        "Distance uses mapped coordinates of imported listed category businesses in this ZIP."
-    )
-    left, right = st.columns(2)
-    with left, st.container(border=True):
-        st.subheader("Activity effect by event (mock)")
-        st.bar_chart(
-            [
-                {"Event": item.event, "Activity difference % (mock)": item.effect_percent}
-                for item in example.effects
-            ],
-            x="Event",
-            y="Activity difference % (mock)",
-            horizontal=True,
-            alt="Illustrative activity effects for weather events",
-        )
-    with right, st.container(border=True):
-        st.subheader("Temperature and activity (mock)")
-        st.scatter_chart(
-            [
-                {"Temperature °C (mock)": temperature, "Activity index (mock)": activity}
-                for temperature, activity in example.temperature_activity
-            ],
-            x="Temperature °C (mock)",
-            y="Activity index (mock)",
-            alt="Illustrative temperature and activity index pairs, not weather observations",
-        )
-    with st.container(border=True):
-        st.subheader("Area sensitivity (mock)")
-        st.dataframe(
-            [
-                {
-                    "Area / ZIP": item.area.label,
-                    "Sensitivity (mock)": _assessment(item, context).weather_sensitivity,
-                    "Selected-event effect % (mock)": weather_example(
-                        item.area.id, context.filters.category, event, rainfall, window
-                    ).selected_event.effect_percent,
-                    "Spatial weather mapping (real)": _percent(item.weather_match_rate, True),
-                }
-                for item in context.summaries
-            ],
-            hide_index=True,
-            alt="Illustrative area sensitivity with real spatial mapping coverage",
-        )
-    with st.expander("Method example and assumptions", expanded=False):
-        st.markdown(example.explanation)
+    if distance is not None:
         st.caption(
-            "A future analysis must align weather with local activity dates and validate its "
-            "baseline and uncertainty. This screen has no causal estimate or measured significance."
+            "Average distance from listed businesses in this ZIP to their mapped weather location. "
+            "Mapping does not measure daily weather completeness."
         )
+    stations = tuple(cell for cell in mapped_cells if cell.source_kind == "acis_station")
+    if stations:
+        _render_station_weather(context, stations)
+    if mapped_cells:
+        with st.container(border=True):
+            st.subheader("Weather mapping")
+            st.dataframe(
+                [
+                    {
+                        "Station / cell": cell.station_name or cell.weather_cell_id,
+                        "Source": (
+                            "ACIS station"
+                            if cell.source_kind == "acis_station"
+                            else cell.source_kind
+                        ),
+                        "Mapped listed businesses": sum(
+                            business.weather_cell_id == cell.weather_cell_id
+                            for business in _area_businesses(context, summary)
+                        ),
+                    }
+                    for cell in mapped_cells
+                ],
+                hide_index=True,
+                alt="Imported weather sources mapped to businesses in the selected ZIP area",
+            )
 
 
 def _render_station_weather(context: ScreenContext, stations: tuple[WeatherCell, ...]) -> None:
+    try:
+        summaries = _station_weather(
+            stations,
+            context.filters.start_date,
+            context.filters.end_date,
+            context.import_revision,
+        )
+    except (ConfigurationError, psycopg.Error):
+        st.info("Station observations are unavailable. Please retry the connection.")
+        return
+    usable = tuple(
+        item
+        for item in summaries
+        if item.temp_min_days or item.temp_max_days or item.precipitation_days
+    )
+    if not usable:
+        return
+    rows: list[dict[str, object]] = []
+    for item in usable:
+        rows.append(
+            {
+                "Station": item.station_name,
+                "Mean daily minimum °C": (
+                    _number(item.mean_temp_min_c) if item.mean_temp_min_c is not None else None
+                ),
+                "Minimum valid days": (
+                    f"{item.temp_min_days:,} / {item.selected_days:,}"
+                    if item.temp_min_days
+                    else None
+                ),
+                "Mean daily maximum °C": (
+                    _number(item.mean_temp_max_c) if item.mean_temp_max_c is not None else None
+                ),
+                "Maximum valid days": (
+                    f"{item.temp_max_days:,} / {item.selected_days:,}"
+                    if item.temp_max_days
+                    else None
+                ),
+                "Precipitation over valid reports (mm)": (
+                    _number(item.precipitation_sum_mm)
+                    if item.precipitation_sum_mm is not None
+                    else None
+                ),
+                "Precipitation valid days": (
+                    f"{item.precipitation_days:,} / {item.selected_days:,}"
+                    if item.precipitation_days
+                    else None
+                ),
+                "Latest usable report in selection": (
+                    str(item.latest_observed_date) if item.latest_observed_date else None
+                ),
+            }
+        )
     with st.container(border=True):
-        st.subheader("Observed station weather (real)")
+        st.subheader("Station weather")
         st.caption(
             "ACIS station observations via Climate Explorer. Each station is summarized "
             "separately for the selected date range. Dates are provider report-date labels; "
             "observation windows may differ from local midnight-to-midnight activity days."
         )
-        try:
-            summaries = _station_weather(
-                stations,
-                context.filters.start_date,
-                context.filters.end_date,
-                context.import_revision,
-            )
-        except (ConfigurationError, psycopg.Error):
-            st.info("Station observations are unavailable. Check the database and climate import.")
-            return
-        if not summaries:
-            st.info("No station observations have been imported for these mapped stations.")
-            return
         st.dataframe(
-            [
-                {
-                    "Station": item.station_name,
-                    "Mean daily minimum °C": _number(item.mean_temp_min_c),
-                    "Minimum valid days": f"{item.temp_min_days:,} / {item.selected_days:,}",
-                    "Mean daily maximum °C": _number(item.mean_temp_max_c),
-                    "Maximum valid days": f"{item.temp_max_days:,} / {item.selected_days:,}",
-                    "Precipitation over valid reports (mm)": _number(item.precipitation_sum_mm),
-                    "Precipitation valid days": (
-                        f"{item.precipitation_days:,} / {item.selected_days:,}"
-                    ),
-                    "Latest usable report in selection": (
-                        str(item.latest_observed_date) if item.latest_observed_date else "N/A"
-                    ),
-                }
-                for item in summaries
-            ],
+            _available_columns(rows),
             hide_index=True,
             alt="Observed weather summaries and valid report coverage for mapped ACIS stations",
         )
         st.caption(
-            "Coverage counts usable reports for each variable, including zero rainfall. "
-            "Missing and flagged reports remain excluded; trace precipitation is treated as "
-            "0 mm and multi-day accumulations are excluded. Precipitation totals cover valid "
-            "reports only. These observations are separate from the illustrative effects below."
+            "Daily coverage excludes missing or flagged reports and includes zero rainfall. "
+            "Trace precipitation counts as 0 mm; reports covering multiple days are excluded. "
+            "Rainfall totals cover available reports only."
         )
+    _render_monthly_weather(context, stations)
+
+
+def _render_monthly_weather(context: ScreenContext, stations: tuple[WeatherCell, ...]) -> None:
+    try:
+        monthly = _station_weather_monthly(
+            stations,
+            context.filters.start_date,
+            context.filters.end_date,
+            context.import_revision,
+        )
+    except (ConfigurationError, psycopg.Error):
+        st.info("Monthly station observations are unavailable. Retry the data connection.")
+        return
+    temperature = [
+        {
+            "Month": item.month_start.isoformat(),
+            "Series": f"{item.summary.station_name} · {label}",
+            "Temperature °C": value,
+            "Valid days": days,
+            "Selected days": item.summary.selected_days,
+        }
+        for item in monthly
+        for label, value, days in (
+            ("minimum", item.summary.mean_temp_min_c, item.summary.temp_min_days),
+            ("maximum", item.summary.mean_temp_max_c, item.summary.temp_max_days),
+        )
+        if value is not None
+    ]
+    precipitation = [
+        {
+            "Month": item.month_start.isoformat(),
+            "Station": item.summary.station_name,
+            "Precipitation mm": item.summary.precipitation_sum_mm,
+            "Valid days": item.summary.precipitation_days,
+            "Selected days": item.summary.selected_days,
+        }
+        for item in monthly
+        if item.summary.precipitation_sum_mm is not None
+    ]
+    if temperature:
+        with st.container(border=True):
+            st.subheader("Monthly station temperature")
+            st.vega_lite_chart(
+                temperature,
+                {
+                    "mark": {"type": "point", "filled": True},
+                    "encoding": {
+                        "x": {
+                            "field": "Month",
+                            "type": "temporal",
+                            "axis": {"format": "%b %Y", "tickCount": 8},
+                        },
+                        "y": {
+                            "field": "Temperature °C",
+                            "type": "quantitative",
+                            "title": "Mean daily temperature °C",
+                        },
+                        "color": {"field": "Series", "type": "nominal"},
+                        "tooltip": [
+                            {"field": "Month", "type": "temporal"},
+                            {"field": "Series"},
+                            {"field": "Temperature °C", "format": ".1f"},
+                            {"field": "Valid days"},
+                            {"field": "Selected days"},
+                        ],
+                    },
+                },
+                height=280,
+                alt="Monthly means of accepted daily minimum and maximum temperatures per station",
+            )
+            st.caption(
+                "Monthly means use accepted provider report dates for each station separately. "
+                "Hover for valid and selected days; boundary months can be partial. "
+                "Missing observations and months are omitted."
+            )
+    if precipitation:
+        with st.container(border=True):
+            st.subheader("Monthly station precipitation")
+            st.vega_lite_chart(
+                precipitation,
+                {
+                    "mark": "bar",
+                    "encoding": {
+                        "x": {
+                            "field": "Month",
+                            "type": "temporal",
+                            "axis": {"format": "%b %Y", "tickCount": 8},
+                        },
+                        "y": {
+                            "field": "Precipitation mm",
+                            "type": "quantitative",
+                            "stack": None,
+                        },
+                        "xOffset": {"field": "Station", "type": "nominal"},
+                        "color": {"field": "Station", "type": "nominal"},
+                        "tooltip": [
+                            {"field": "Month", "type": "temporal"},
+                            {"field": "Station"},
+                            {"field": "Precipitation mm", "format": ".1f"},
+                            {"field": "Valid days"},
+                            {"field": "Selected days"},
+                        ],
+                    },
+                },
+                height=280,
+                alt="Monthly precipitation over accepted station reports with valid-day coverage",
+            )
+            st.caption(
+                "Totals cover valid reports only; zero rainfall is retained. Hover for report "
+                "coverage. Incomplete or partial months are not directly comparable with complete "
+                "months; missing rainfall is never filled with zero."
+            )
 
 
 def render_forecast() -> None:
-    context = _context()
-    if context is None:
-        return
-    summary = _selected_area(context, "forecast_area")
-    activity = _activity_summary(context, summary)
-    with st.container(horizontal=True):
-        horizon = st.selectbox(
-            "Forecast horizon (weeks, mock)", [4, 8, 12, 24], index=2, key="horizon"
-        )
-        scenario = st.selectbox("Scenario (mock)", FORECAST_SCENARIOS, key="scenario")
-        disruption_week = min(int(st.session_state.get("disruption_week", 4)), horizon)
-        st.session_state["disruption_week"] = disruption_week
-        disruption = st.slider("Disruption week (mock)", 1, horizon, key="disruption_week")
-    st.caption(MOCK_LABEL)
-    st.caption(
-        f"Historical origin: {context.filters.end_date:%Y-%m-%d}. Future weeks are illustrative "
-        "relative to that date, not a forecast from today."
-    )
-    if not activity.checkin_count:
-        st.info(
-            "No real historical activity for this ZIP and interval. Select another area or period."
-        )
-        return
-    example = forecast_example(
-        summary.area.id,
-        context.filters.category,
-        context.filters.end_date,
-        horizon,
-        disruption,
-        scenario,
-        activity.average_weekly_checkins,
-    )
-    baseline_total = sum(point.baseline for point in example.points)
-    _metrics(
-        (
-            ("Expected check-ins (mock)", _number(example.total)),
-            ("Weekly average (mock)", _number(example.weekly_average)),
-            ("Disruption difference (mock)", _percent(example.disruption_percent)),
-            ("Baseline total (mock)", _number(baseline_total)),
-        )
-    )
-    st.caption(
-        f"Illustrative weekly range: {min(p.lower for p in example.points):,.1f} to "
-        f"{max(p.upper for p in example.points):,.1f}. "
-        "Bands are examples, not calibrated uncertainty."
-    )
-    with st.container(border=True):
-        st.subheader("Historical activity and illustrative forecast")
-        rows: list[dict[str, object]] = [
-            {"Week": day.isoformat(), "Check-ins": count, "Series": "Recorded activity (real)"}
-            for day, count in activity.weekly_activity[-26:]
-        ]
-        rows += [
-            {
-                "Week": point.week_start.isoformat(),
-                "Check-ins": point.expected,
-                "Lower": point.lower,
-                "Upper": point.upper,
-                "Series": "Forecast (mock)",
-            }
-            for point in example.points
-        ]
-        st.vega_lite_chart(
-            rows,
-            {
-                "layer": [
-                    {
-                        "transform": [{"filter": "datum.Series === 'Forecast (mock)'"}],
-                        "mark": {"type": "area", "opacity": 0.15, "color": "#26745a"},
-                        "encoding": {
-                            "x": {"field": "Week", "type": "temporal"},
-                            "y": {"field": "Lower", "type": "quantitative", "title": "Check-ins"},
-                            "y2": {"field": "Upper"},
-                        },
-                    },
-                    {
-                        "mark": "line",
-                        "encoding": {
-                            "x": {"field": "Week", "type": "temporal"},
-                            "y": {"field": "Check-ins", "type": "quantitative"},
-                            "color": {"field": "Series", "type": "nominal"},
-                            "tooltip": [
-                                {"field": "Week", "type": "temporal"},
-                                {"field": "Check-ins"},
-                                {"field": "Series"},
-                            ],
-                        },
-                    },
-                ],
-            },
-            height=300,
-            alt="Real historical weekly check-ins followed by labeled illustrative future band",
-        )
-        st.caption("Past weeks show recorded counts; future line and shaded band are mock content.")
-        st.caption(
-            "Real weeks use Monday buckets; the selected interval's boundary weeks may be partial."
-        )
-    left, right = st.columns(2)
-    with left, st.container(border=True):
-        st.subheader("Scenario comparison (mock)")
-        st.bar_chart(
-            [
-                {"Scenario": name, "Expected total (mock)": total}
-                for name, total in example.scenarios
-            ],
-            x="Scenario",
-            y="Expected total (mock)",
-            alt="Illustrative future check-in totals across weather scenarios",
-        )
-    with right, st.container(border=True):
-        st.subheader("Forecast drivers (mock)")
-        st.bar_chart(
-            [
-                {"Driver": name, "Contribution % (mock)": contribution}
-                for name, contribution in example.drivers
-            ],
-            x="Driver",
-            y="Contribution % (mock)",
-            horizontal=True,
-            alt="Illustrative forecast factor contributions",
-        )
-    with st.expander("Model accuracy example (mock)", expanded=False):
-        st.metric("Backtest MAE (mock)", _number(example.mock_mae))
-        st.markdown(example.explanation)
-        st.caption("No ZIP forecast model or backtest has been trained for this screen.")
+    """An unfilled forecast has no synthetic outputs to display."""
+    return
 
 
 def render_comparison() -> None:
     context = _context()
     if context is None:
         return
+    covered = _activity_coverage(context)
+    _activity_coverage_notice(context, covered)
     options = [summary.area.id for summary in context.summaries]
     labels = {summary.area.id: summary.area.label for summary in context.summaries}
     if "compare_areas" not in st.session_state:
@@ -730,107 +837,87 @@ def render_comparison() -> None:
         st.info("Select at least two eligible ZIP areas to compare.")
         return
     selected = [summary for summary in context.summaries if summary.area.id in selected_ids]
-    assessments = {summary.area.id: _assessment(summary, context) for summary in selected}
+    activity = (
+        {summary.area.id: _activity_summary(context, summary) for summary in selected}
+        if covered
+        else {}
+    )
     st.caption(
-        "Real snapshot/activity indicators · Scores, review growth and advice are mock content"
+        "Compare activity and business snapshots across ZIP areas."
+        if covered
+        else "Compare business snapshots across ZIP areas."
     )
     with st.container(horizontal=True):
         for summary in selected:
-            assessment = assessments[summary.area.id]
             with st.container(border=True, width=270):
                 st.subheader(summary.area.label)
-                st.metric("Overall score (mock)", _number(assessment.score))
-                st.markdown(f"**{summary.business_count}** listed category businesses")
-                st.markdown(f"**{summary.average_weekly_checkins:,.1f}** weekly check-ins (real)")
-                st.markdown(f"**{_number(summary.average_rating)}** snapshot rating (real)")
-                st.caption(f"Weather sensitivity (mock): {assessment.weather_sensitivity}")
-                st.caption(f"Review growth (mock): {_percent(assessment.review_growth_percent)}")
+                if covered:
+                    st.metric("Weekly check-ins", _number(summary.average_weekly_checkins))
+                    st.markdown(f"**{summary.checkin_count:,}** recorded check-ins")
+                    st.markdown(f"**{summary.business_count:,}** listed category businesses")
+                else:
+                    st.metric("Listed category businesses", f"{summary.business_count:,}")
+                if summary.average_rating is not None:
+                    st.markdown(f"**{_number(summary.average_rating)}** snapshot rating")
+                if covered and summary.yoy_percent is not None:
+                    st.caption(f"YoY daily activity: {_percent(summary.yoy_percent)}")
     with st.container(border=True):
-        st.subheader("Dimension scores (mock)")
-        dimensions = [
-            {
-                "Dimension": dimension.label,
-                "Area": summary.area.label,
-                "Score (mock)": dimension.score,
-            }
-            for summary in selected
-            for dimension in assessments[summary.area.id].dimensions
-        ]
-        dimensions += [
-            {
-                "Dimension": "Stable all year",
-                "Area": summary.area.label,
-                "Score (mock)": stable_year_score(summary.area.id, context.filters.category),
-            }
-            for summary in selected
-        ]
-        st.bar_chart(
-            dimensions,
-            x="Dimension",
-            y="Score (mock)",
-            color="Area",
-            stack=False,
-            alt="Illustrative factor scores compared across selected ZIP areas",
-        )
-        st.caption("Stable all year is an additional mock dimension outside the five-factor score.")
-    with st.container(border=True):
-        st.subheader("Monthly seasonality (real activity)")
-        monthly = [
-            row
-            for summary in selected
-            for row in _monthly_rows(_activity_summary(context, summary), summary.area.label)
-        ]
-        st.line_chart(
-            monthly,
-            x="Month",
-            y="Activity index",
-            color="Area",
-            alt="Real monthly activity indices for the compared ZIP areas",
+        st.subheader("Recorded indicators" if covered else "Business snapshot indicators")
+        rows = []
+        for summary in selected:
+            item = activity.get(summary.area.id)
+            rows.append(
+                {
+                    **_indicator_row(summary, context),
+                    "Weekday share": (
+                        _percent(item.weekday_share, True)
+                        if item is not None and item.weekday_share is not None
+                        else None
+                    ),
+                    "Weekend share": (
+                        _percent(item.weekend_share, True)
+                        if item is not None and item.weekend_share is not None
+                        else None
+                    ),
+                    "Seasonality ratio": (
+                        _number(item.seasonality_ratio, 2, "×")
+                        if item is not None and item.seasonality_ratio is not None
+                        else None
+                    ),
+                }
+            )
+        st.dataframe(
+            _available_columns(rows),
+            hide_index=True,
+            alt=(
+                "Recorded activity and snapshot indicators across selected ZIP areas"
+                if covered
+                else "Imported business snapshot indicators across selected ZIP areas"
+            ),
         )
         st.caption(
-            "Index 100 = each area's mean daily activity in this interval. Monthly rates use "
-            "covered calendar days, not just days with check-ins; undefined indices are omitted."
+            "Nearby counts use the selected radius around each representative area center. "
+            "Ratings and business counts describe the source snapshot."
         )
-    with st.container(border=True):
-        st.subheader("Category review trend (mock)")
-        st.caption(
-            "Illustrative index · The local review sample cannot supply complete historical growth."
-        )
-        st.line_chart(
-            [
-                {"Year": str(year), "Area": summary.area.label, "Review index (mock)": index}
-                for summary in selected
-                for year, index in review_trend(
-                    summary.area.id,
-                    context.filters.category,
-                    context.filters.start_date.year,
-                    context.filters.end_date.year,
-                )
-            ],
-            x="Year",
-            y="Review index (mock)",
-            color="Area",
-            alt="Illustrative review trend indices for the compared areas",
-        )
-    with st.container(border=True):
-        st.subheader("Takeaway (mock)")
-        st.caption(MOCK_LABEL)
-        winner = max(selected, key=lambda item: assessments[item.area.id].score or 0)
-        st.markdown(assessments[winner.area.id].explanation)
-        st.caption(
-            "Use the recorded evidence to explore candidates. "
-            "Mock scores are illustrative examples."
-        )
-    _csv_download(
-        [
-            {
-                **_area_export(summary, assessments[summary.area.id]),
-                "stable_all_year_score_mock": stable_year_score(
-                    summary.area.id, context.filters.category
-                ),
-            }
-            for summary in selected
-        ],
-        context,
-        "comparison",
-    )
+    monthly = [
+        row
+        for summary in selected
+        if covered
+        for row in _monthly_rows(activity[summary.area.id], summary.area.label)
+    ]
+    if monthly:
+        with st.container(border=True):
+            st.subheader("Monthly activity comparison")
+            st.line_chart(
+                monthly,
+                x="Month",
+                y="Activity index",
+                color="Area",
+                alt="Recorded monthly activity indices for the compared ZIP areas",
+            )
+            st.caption(
+                "Index 100 = each area's mean daily activity in this interval. Monthly rates use "
+                "covered calendar days, not just days with check-ins; undefined indices "
+                "are omitted."
+            )
+    _csv_download([_area_export(summary, context) for summary in selected], context, "comparison")

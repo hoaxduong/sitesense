@@ -1,6 +1,7 @@
 """Station summaries preserve report quality, missingness and climate revisions."""
 
 from contextlib import contextmanager
+from dataclasses import astuple, replace
 from datetime import date
 from typing import Any
 
@@ -86,6 +87,9 @@ def _mock_rows(monkeypatch: pytest.MonkeyPatch, rows: list[Any]) -> None:
         def fetchall(self) -> list[Any]:
             return rows
 
+        def fetchone(self) -> Any:
+            return rows[0] if rows else None
+
     @contextmanager
     def connect() -> Any:
         yield Connection()
@@ -125,3 +129,81 @@ def test_station_loader_returns_empty_coverage_for_selected_station_without_repo
     assert summaries[0].selected_days == 3
     assert summaries[0].weather_cell_id == STATION.weather_cell_id
     assert summaries[0].precipitation_sum_mm is None
+
+
+def test_monthly_weather_keeps_partial_month_coverage_and_real_zero_rain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = (
+        replace(_report(1, "pcpn", 0), observation_date=date(2021, 1, 31)),
+        replace(_report(1, "tmin", 32), observation_date=date(2021, 1, 31)),
+        replace(_report(1, "tmax", 68), observation_date=date(2021, 1, 31)),
+        replace(_report(1, "pcpn", 0.5), observation_date=date(2021, 2, 1)),
+        replace(_report(1, "pcpn", 2, "A"), observation_date=date(2021, 2, 2)),
+        replace(_report(1, "tmin", 86), observation_date=date(2021, 2, 1)),
+        replace(_report(1, "tmax", 68), observation_date=date(2021, 2, 1)),
+    )
+    _mock_rows(monkeypatch, [astuple(report) for report in reports])
+    monthly = repository.load_station_weather_monthly(
+        (STATION,), date(2021, 1, 31), date(2021, 2, 2)
+    )
+    assert [item.month_start for item in monthly] == [date(2021, 1, 1), date(2021, 2, 1)]
+    january, february = [item.summary for item in monthly]
+    assert january.selected_days == 1
+    assert january.precipitation_days == 1
+    assert january.precipitation_sum_mm == 0
+    assert january.mean_temp_min_c == 0
+    assert january.mean_temp_max_c == 20
+    assert february.selected_days == 2
+    assert february.precipitation_days == 1
+    assert february.precipitation_sum_mm == pytest.approx(12.7)
+    assert february.mean_temp_min_c is february.mean_temp_max_c is None
+
+
+def test_monthly_weather_excludes_unusable_reports_and_keeps_stations_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other = WeatherCell("acis_OTHER", 40, -75, "acis_station", "Other station")
+    reports = (
+        _report(1, "pcpn", None),
+        replace(_report(1, "pcpn", 2), weather_cell_id=other.weather_cell_id),
+    )
+    _mock_rows(monkeypatch, [astuple(report) for report in reports])
+    monthly = repository.load_station_weather_monthly((STATION, other), START, END)
+    assert len(monthly) == 1
+    assert monthly[0].summary.weather_cell_id == other.weather_cell_id
+    assert monthly[0].summary.precipitation_sum_mm == pytest.approx(50.8)
+    _mock_rows(monkeypatch, [])
+    assert repository.load_station_weather_monthly((STATION,), START, END) == ()
+
+
+def test_weather_date_coverage_is_independent_and_absent_without_completed_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_rows(monkeypatch, [])
+    assert repository.load_weather_coverage() is None
+    _mock_rows(
+        monkeypatch,
+        [({"start_date": "2009-01-01", "end_date": "2026-10-09"}, "source_station_local_standard")],
+    )
+    coverage = repository.load_weather_coverage()
+    assert coverage is not None
+    assert coverage.start_date == date(2009, 1, 1)
+    assert coverage.end_date == date(2026, 10, 9)
+    assert coverage.timestamp_policy == "source_station_local_standard"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        ({"start_date": "bad", "end_date": "2026-10-09"}, "source_station_local_standard"),
+        ({"start_date": "2026-10-09", "end_date": "2009-01-01"}, "source_station_local_standard"),
+        ({"start_date": "2009-01-01", "end_date": "2026-10-09"}, None),
+    ],
+)
+def test_weather_coverage_requires_valid_date_provenance(
+    monkeypatch: pytest.MonkeyPatch, metadata: Any
+) -> None:
+    _mock_rows(monkeypatch, [metadata])
+    with pytest.raises(repository.DataUnavailableError, match="Reimport climate data"):
+        repository.load_weather_coverage()

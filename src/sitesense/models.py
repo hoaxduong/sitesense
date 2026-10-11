@@ -61,6 +61,14 @@ class StationWeatherSummary:
 
 
 @dataclass(frozen=True)
+class StationWeatherMonth:
+    """Calendar-month summary within the selected interval, for one station."""
+
+    month_start: date
+    summary: StationWeatherSummary
+
+
+@dataclass(frozen=True)
 class Business:
     business_id: str
     area_id: int | None
