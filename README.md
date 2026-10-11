@@ -42,7 +42,7 @@ Configuration is in `.streamlit/config.toml`. Local database credentials are in 
 
 ## Explore the datasets
 
-Start with two notebooks, each using the supplied Google Drive archive:
+Prepare the source data with two exploration notebooks, each using the supplied Google Drive archive:
 
 | Notebook | Source | Exploration |
 | --- | --- | --- |
@@ -50,6 +50,24 @@ Start with two notebooks, each using the supplied Google Drive archive:
 | [02 — Climate](notebooks/02_climate_dataset_exploration.ipynb) | [Climate-Explorer.zip](https://drive.google.com/file/d/1yPxTytgYTcc0V9X5w-zk1_SoBts_bZhI/view?usp=drive_link) | Station coverage/flags, actual observation dates, complete-month summaries, county history and scenarios |
 
 Run notebook 01, then notebook 02 as part of the first setup above. Each notebook downloads or verifies its archive, stages files at the paths used by the importer, and saves bounded summaries. Cached archives are `data/downloads/yelp.zip` and `data/downloads/climate.zip`; source tables are under `data/raw/yelp/` and `data/raw/climate/`; exploration results and executed copies are under the corresponding `data/processed/` directories. Keep about 5 GB free for Yelp and 550 MB for Climate, plus analysis outputs. These artifacts remain ignored by Git. See [data/README.md](data/README.md) for paths, headless execution and [Climate observation/scenario definitions](data/README.md#climate-snapshot).
+
+## Experiment with location forecasts
+
+Open [03 — Location forecast POC](notebooks/03_location_forecast_poc.ipynb) after preparing the raw files above, using the same notebook environment. It reads local Yelp and ACIS files without a database or further downloads. Compare a calendar baseline, Poisson regression and HistGradientBoosting for daily recorded check-ins per historical cohort business, then rank eligible ZIP areas for Restaurants or Day Spas.
+
+Prediction inputs are location coordinates and metro group, industry, the requested date's month and weekday, and weather in Celsius and millimeters. Activity is used to select the training cohort, learn the target and score held-out predictions; activity lags, trends and cohort size are excluded from prediction inputs. Supply weather to predict any date:
+
+```python
+recommend(
+    date="2026-12-15",
+    metro="Tampa",
+    category="Day Spas",
+    weather={"tmax_c": 27, "tmin_c": 19, "precip_mm": 2},
+    top_n=3,
+)
+```
+
+If weather is omitted, the notebook uses complete observed ACIS values for the requested day and reports excluded areas with missing weather. The default weather model is selected between Poisson and HistGradientBoosting on 2018 validation; the calendar baseline remains a comparison even when it scores better. Philadelphia, Nashville and Tampa use dataset-limited county groups. Predictions describe a fixed historical business cohort, not new-store success; supplied weather is a scenario, and no 2026 activity labels are available to verify accuracy. See [POC execution and outputs](data/README.md#location-forecast-poc).
 
 ## Validation
 
@@ -76,7 +94,7 @@ uv.lock                 Shared Python dependency lockfile
 .streamlit/config.toml  Streamlit configuration and theme
 tests/                  App, database, and data preparation tests
 scripts/                Validation and server smoke checks
-notebooks/              Two dataset download and exploration notebooks
+notebooks/              Dataset exploration and location forecast POC notebooks
 data/                   Local source and analysis artifacts
 ```
 

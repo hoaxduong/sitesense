@@ -24,6 +24,7 @@ notebooks = [
     "nbformat>=5.10,<6",
     "numpy>=2,<3",
     "pandas>=2.2,<4",
+    "scikit-learn>=1.7,<2",
 ]
 
 [build-system]

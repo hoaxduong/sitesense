@@ -32,6 +32,42 @@ uv run --frozen --group notebooks jupyter nbconvert \
 
 Keep source notebook outputs empty. The executed copies are `data/processed/yelp/01_yelp_dataset_exploration.executed.ipynb` and `data/processed/climate/02_climate_dataset_exploration.executed.ipynb`. Raw files, executed copies and generated artifacts stay local and are ignored by Git.
 
+## Location forecast POC
+
+After the raw files are prepared, open [03 — Location forecast POC](../notebooks/03_location_forecast_poc.ipynb) in the same Jupyter environment. No database or new download is required. The notebook compares three daily models: `calendar_mean`, `poisson_weather` and `hgb_weather`. The target is recorded daily check-ins divided by the fixed historical cohort's business count, for Restaurants and Day Spas. Philadelphia, Nashville and Tampa use dataset-limited county groups rather than official metro boundaries.
+
+Prediction features contain only location coordinates and metro group, industry, calendar month and weekday derived from the requested date, and daily weather (`tmax_c`, `tmin_c`, `precip_mm`). Activity selects the training cohort and supplies labels for training and scoring. Cohort counts supply the label denominator and training weights, but are not predictors; activity lags and trends are also excluded. Validation activity labels stay separate from feature frames.
+
+Train on 2013–2017, select models using 2018, then refit through 2018 and test on 2019. Held-out observed target-day weather makes this a conditional prediction experiment. The default weather model is selected between Poisson and HistGradientBoosting; report the calendar baseline alongside them, including when it wins. Use `model="calendar_mean"` to explore that baseline.
+
+Supply daily weather in Celsius and millimeters to predict any valid date, including dates beyond the snapshot:
+
+```python
+recommend(
+    date="2026-12-15",
+    metro="Tampa",
+    category="Day Spas",
+    weather={"tmax_c": 27, "tmin_c": 19, "precip_mm": 2},
+    top_n=3,
+)
+```
+
+If weather is omitted, only candidate areas whose mapped dominant station has all three usable observations for the requested day are ranked. The notebook reports exclusions and does not fill missing observations with climate normals. Supplied weather represents a scenario; results estimate activity at historical existing businesses, not new-store success or current demand. The cohort inventory may be stale, and no 2026 activity labels are available to validate predictions.
+
+Each run exports `daily_panel.csv`, `validation_metrics.csv`, `test_metrics.csv`, held-out predictions, `sample_predictions.csv`, `sample_summary.csv`, `shortlists.csv` and a provenance manifest under `data/processed/location_forecast_poc/`.
+
+To execute a review copy:
+
+```sh
+mkdir -p data/processed/location_forecast_poc
+uv run --frozen --group notebooks jupyter nbconvert \
+  --to notebook --execute --ExecutePreprocessor.timeout=1800 \
+  --output=03_location_forecast_poc.executed \
+  --output-dir=data/processed/location_forecast_poc notebooks/03_location_forecast_poc.ipynb
+```
+
+Keep source notebook outputs empty. CSVs, the manifest and `03_location_forecast_poc.executed.ipynb` are saved under `data/processed/location_forecast_poc/` and ignored by Git.
+
 ## Local files and reruns
 
 Use the same layout for both datasets: `data/downloads/` holds cached archives, `data/raw/<dataset>/` holds source tables used by the importer, and `data/processed/<dataset>/` holds exploration results and executed notebooks. Local dataset names are `yelp` and `climate`; the Drive archive names in the source links remain unchanged.
@@ -45,6 +81,7 @@ Use the same layout for both datasets: `data/downloads/` holds cached archives, 
 | `data/raw/climate/` | Canonical `yelp_stations/`, `yelp_counties/`, `yelp_scope/` and retained `sources/` |
 | `data/processed/yelp/` | Yelp coverage/activity CSVs and `exploration_manifest.json`; plots are embedded in the executed notebook |
 | `data/processed/climate/` | Climate quality/coverage/scenario CSVs, figures and `manifest.json` |
+| `data/processed/location_forecast_poc/` | Forecast comparison/ranking CSVs, manifest and executed POC notebook |
 
 The Yelp ZIP contains a gzip-compressed TAR. Notebook 01 streams it once to stage the required tables; it does not extract complete review, user or tip tables. Subsequent runs reuse staged files only when the archive, sample size and staged fingerprints match. The review prefix is descriptive and is not a random sample.
 
@@ -95,4 +132,4 @@ uv run --frozen --env-file .env python -m sitesense.import_data
 
 For a weather-only refresh, complete notebook 02 with the intended snapshot, then run `uv run --frozen --env-file .env python -m sitesense.import_data --weather-only` for businesses already imported. This leaves Yelp business and activity records in place. See [Database setup](../docs/database.md) for configuration and importer refresh behavior. The app and importer do not download archives; county scenarios remain local research inputs.
 
-Check-ins represent recorded activity, not customers or revenue. Yelp timestamps have no timezone offset, while station dates use provider observation windows. Neither notebook joins activity to weather or estimates causal effects.
+Check-ins represent recorded activity, not customers or revenue. Yelp timestamps have no timezone offset, while station dates use provider observation windows. Neither exploration notebook joins activity to weather or estimates causal effects.
