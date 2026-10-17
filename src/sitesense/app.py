@@ -22,6 +22,7 @@ from sitesense.ui import ScreenContext, render_setup
 
 SCREEN_KEYS = {
     "Site ranking": "ranking",
+    "Location map": "location_map",
     "Customer activity": "activity",
     "Weather observations": "weather",
     "Compare sites": "comparison",
@@ -231,6 +232,7 @@ def render_app() -> None:
                 icon=":material/location_on:",
                 default=True,
             ),
+            st.Page(pages / "location_map.py", title="Location map", icon=":material/map:"),
             st.Page(
                 pages / "customer_activity.py", title="Customer activity", icon=":material/groups:"
             ),
