@@ -141,6 +141,8 @@ class AreaSummary:
     nearby_business_count: int
     weather_match_rate: float | None
     yoy_percent: float | None
+    rated_business_count: int = 0
+    rated_review_count: int = 0
 
 
 @dataclass(frozen=True)

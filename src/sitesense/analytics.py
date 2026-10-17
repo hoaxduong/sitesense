@@ -118,7 +118,8 @@ def summarize_areas(
         members = by_area.get(area.id, [])
         if len(members) < min_businesses:
             continue
-        ratings = [business.stars for business in members if business.stars is not None]
+        rated_businesses = [business for business in members if business.stars is not None]
+        ratings = [business.stars for business in rated_businesses if business.stars is not None]
         nearby = 0
         if area.latitude is not None and area.longitude is not None:
             nearby = sum(
@@ -142,6 +143,8 @@ def summarize_areas(
                 checkin_count=checkins,
                 average_weekly_checkins=checkins * 7 / calendar_days if calendar_days else 0.0,
                 average_rating=sum(ratings) / len(ratings) if ratings else None,
+                rated_business_count=len(rated_businesses),
+                rated_review_count=sum(business.review_count for business in rated_businesses),
                 nearby_business_count=nearby,
                 weather_match_rate=(
                     sum(business.weather_cell_id in weather_ids for business in members)

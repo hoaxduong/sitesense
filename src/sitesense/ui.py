@@ -205,6 +205,12 @@ def _area_export(summary: AreaSummary, context: ScreenContext) -> dict[str, obje
         "average_weekly_checkins": summary.average_weekly_checkins if covered else None,
         "yoy_percent": summary.yoy_percent if covered else None,
         "snapshot_mean_rating": summary.average_rating,
+        "snapshot_rated_businesses": (
+            summary.rated_business_count if summary.average_rating is not None else None
+        ),
+        "snapshot_rating_review_count": (
+            summary.rated_review_count if summary.average_rating is not None else None
+        ),
         "nearby_listed_category_businesses": (
             summary.nearby_business_count
             if summary.area.latitude is not None and summary.area.longitude is not None
@@ -227,6 +233,12 @@ def _indicator_row(summary: AreaSummary, context: ScreenContext) -> dict[str, ob
             _percent(summary.yoy_percent) if covered and summary.yoy_percent is not None else None
         ),
         "Snapshot rating": summary.average_rating,
+        "Rated businesses": (
+            summary.rated_business_count if summary.average_rating is not None else None
+        ),
+        "Snapshot reviews": (
+            summary.rated_review_count if summary.average_rating is not None else None
+        ),
         "Nearby category businesses": (
             summary.nearby_business_count
             if summary.area.latitude is not None and summary.area.longitude is not None
@@ -238,6 +250,29 @@ def _indicator_row(summary: AreaSummary, context: ScreenContext) -> dict[str, ob
             else None
         ),
     }
+
+
+def _single_leader(summaries: list[AreaSummary], key: Any) -> AreaSummary | None:
+    """Return a leader only when the supplied comparison has no tie."""
+    highest = max(key(summary) for summary in summaries)
+    leaders = [summary for summary in summaries if key(summary) == highest]
+    return leaders[0] if len(leaders) == 1 else None
+
+
+def _comparison_shortlist(
+    summaries: list[AreaSummary], covered: tuple[date, date] | None
+) -> AreaSummary | None:
+    """Choose an evidence-led shortlist without treating it as a success forecast."""
+    if covered is None:
+        return None
+    return _single_leader(
+        summaries,
+        lambda summary: (
+            summary.average_weekly_checkins,
+            summary.average_rating if summary.average_rating is not None else -1.0,
+            summary.business_count,
+        ),
+    )
 
 
 def render_ranking() -> None:
@@ -950,10 +985,69 @@ def render_comparison() -> None:
         if covered
         else "Compare business snapshots across ZIP areas."
     )
+    shortlist = _comparison_shortlist(selected, covered)
+    activity_leader = (
+        _single_leader(selected, lambda summary: summary.average_weekly_checkins)
+        if covered is not None
+        else None
+    )
+    rated = [summary for summary in selected if summary.average_rating is not None]
+    rating_leader = _single_leader(rated, lambda summary: summary.average_rating) if rated else None
+    if shortlist is not None:
+        with st.container(border=True):
+            st.subheader("Area to shortlist", icon=":material/recommend:")
+            st.badge(
+                "Prioritize for further research",
+                icon=":material/check_circle:",
+                color="green",
+                help="This is a transparent comparison rule, not a forecast of store success.",
+            )
+            st.markdown(f"**{shortlist.area.label}** leads this comparison.")
+            reason = "highest observed weekly activity"
+            if activity_leader is not shortlist:
+                reason = (
+                    "the activity tie-break, then its snapshot rating and listed-business count"
+                )
+            st.caption(
+                f"Selected by {reason}. Rating is a Yelp business snapshot, not a historical "
+                "performance measure."
+            )
+            values: list[tuple[str, str | None]] = [
+                ("Weekly check-ins", _number(shortlist.average_weekly_checkins)),
+                ("Listed businesses", f"{shortlist.business_count:,}"),
+            ]
+            if shortlist.average_rating is not None:
+                values.extend(
+                    (
+                        ("Average rating", f"{_number(shortlist.average_rating)} ★"),
+                        ("Snapshot reviews", f"{shortlist.rated_review_count:,}"),
+                    )
+                )
+            _metrics(tuple(values))
+    elif covered is not None:
+        st.info(
+            "No single area leads this comparison. The selected areas are tied after "
+            "activity, snapshot rating, and listed-business count."
+        )
+    else:
+        st.info(
+            "No area is shortlisted because the selected dates have no imported activity. "
+            "Use the snapshot ratings below as supporting context."
+        )
     with st.container(horizontal=True):
         for summary in selected:
             with st.container(border=True, width=270):
                 st.subheader(summary.area.label)
+                if shortlist is summary:
+                    st.badge(
+                        "Shortlist for research",
+                        icon=":material/recommend:",
+                        color="green",
+                    )
+                elif activity_leader is summary:
+                    st.badge("Highest activity", icon=":material/trending_up:", color="blue")
+                elif rating_leader is summary:
+                    st.badge("Highest rating", icon=":material/star:", color="yellow")
                 if covered:
                     st.metric("Weekly check-ins", _number(summary.average_weekly_checkins))
                     st.markdown(f"**{summary.checkin_count:,}** recorded check-ins")
@@ -961,7 +1055,11 @@ def render_comparison() -> None:
                 else:
                     st.metric("Listed category businesses", f"{summary.business_count:,}")
                 if summary.average_rating is not None:
-                    st.markdown(f"**{_number(summary.average_rating)}** snapshot rating")
+                    st.metric("Average rating", f"{_number(summary.average_rating)} ★")
+                    st.caption(
+                        f"{summary.rated_business_count:,} rated businesses · "
+                        f"{summary.rated_review_count:,} snapshot reviews"
+                    )
                 if covered and summary.yoy_percent is not None:
                     st.caption(f"YoY daily activity: {_percent(summary.yoy_percent)}")
     with st.container(border=True):
