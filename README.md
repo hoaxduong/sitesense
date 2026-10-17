@@ -1,8 +1,8 @@
 # SiteSense AI
 
-Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. The four populated screens show activity rankings, activity patterns, observed station weather, and area comparisons. Rankings use recorded check-ins; optional indicators and charts appear only when usable data exists. Model scores, inferred weather effects, review growth, AI advice, and forecasts remain hidden until applicable results are available.
+Weather-aware retail location assessment, built as one Python app with Streamlit and PostgreSQL as its application database. The app compares source ZIP areas for Restaurant and Spa in Philadelphia, Nashville, and Tampa using historical business and check-in data. Four historical screens show activity rankings, activity patterns, observed station weather, and area comparisons. A separate Demand forecast screen ranks areas using a locally trained weather model. Rankings use recorded check-ins; optional indicators and charts appear only when usable data exists. Inferred weather effects, review growth and AI advice remain hidden until applicable results are available.
 
-Each screen remembers its own date range. Quick presets select the latest 7, 30, 90, or 365 imported days, or all available history; custom ranges can extend beyond imported coverage. Weather defaults to the latest 30 station report days independently of the historical activity period. Missing observations remain missing, and selecting dates outside activity coverage keeps business snapshots visible while hiding unavailable activity indicators.
+Each historical screen remembers its own date range. Quick presets select the latest 7, 30, 90, or 365 imported days, or all available history; custom ranges can extend beyond imported coverage. Weather defaults to the latest 30 station report days independently of the historical activity period. Missing observations remain missing, and selecting dates outside activity coverage keeps business snapshots visible while hiding unavailable activity indicators.
 
 Weather observations also fills Census ZIP-area polygons by temperature or precipitation for the selected dates. Values represent mapped-station observations, with business mapping and valid-report coverage in tooltips. Missing values are gray. See [ZIP weather map data and boundaries](docs/zip-weather-map.md) for the aggregation and boundary preparation.
 
@@ -73,7 +73,19 @@ recommend(
 
 If weather is omitted, the notebook uses complete observed ACIS values for the requested day and reports excluded areas with missing weather. The default weather model is selected between Poisson and HistGradientBoosting on 2018 validation; the calendar baseline remains a comparison even when it scores better. Philadelphia, Nashville and Tampa use dataset-limited county groups. Predictions describe a fixed historical business cohort, not new-store success; supplied weather is a scenario, and no 2026 activity labels are available to verify accuracy. See [POC execution and outputs](data/README.md#location-forecast-poc).
 
-The notebook's county-based historical cohorts differ from the app's city-only ZIP groups, and it exports saved predictions rather than a fitted model. These results stay in the research notebook; the app's forecast screen is hidden. See [the latest data and UI audit](docs/data-ui-audit.md) for coverage and remaining gaps.
+Notebook 03 preserves the original model comparison. Its county-based historical cohorts differ from the app's city-only ZIP groups, and its saved predictions are research outputs. Use notebook 04 below to train the fitted model consumed by the app. See [the data and UI audit](docs/data-ui-audit.md) for coverage and research boundaries.
+
+## Train and use the forecast
+
+Open [04 — Full history forecast training](notebooks/04_full_history_forecast_training.ipynb) after notebooks 01 and 02, and use **Restart Kernel and Run All**. The reporting notebook documents source verification, cohort selection, daily labels and weather quality, temporal evaluation, the final fit, and artifact verification. It needs the local raw files but no PostgreSQL connection.
+
+The notebook keeps the HGB weather model selected for the POC and compares it with the calendar baseline. Evaluation selects its cohort and fits on 2010–2019, validates on 2020, refits through 2020 and tests on 2021. Preprocessing and calendar references use only the applicable training period; HGB settings remain fixed. These recent-year backtests are exploratory because 2020–2021 were already inspected as stress periods in an earlier run. The final model is then refitted on all usable labeled weather days from **2010-01-01 through 2022-01-18**, across Restaurants and Day Spas in the three county-based metro groups. The incomplete last archive day, January 19, is excluded; January 1–18 is retained. The final catalog includes businesses eligible within that full training period, so the historical evaluation metrics describe the earlier evaluation catalog, not an independent test of the expanded final catalog.
+
+Prediction inputs are metro, industry, location coordinates, month and weekday, and daily maximum/minimum temperature and precipitation. Activity is used for cohort preparation, training labels and weights, and held-out scoring; prediction does not read check-ins, activity lags or business counts. The output estimates recorded check-ins per historical cohort business per day, for screening existing source ZIP areas. It does not measure customers, revenue or new-store success.
+
+The notebook writes `models/location_forecast/` with the fitted model, location catalog, daily weather, calendar baseline and a versioned provenance manifest. Start the app and open **Demand forecast**. Choose a metro, industry and any date, then enter a weather scenario or use complete observed station weather for that date. The page shows area rankings, the historical calendar baseline, missing-weather exclusions and a CSV download. It works without a database; without a compatible model bundle, it shows training instructions. Model training runs explicitly in the notebook, never on a page request.
+
+Supplied weather is a scenario; future dates require you to provide weather. The app does not fetch a weather forecast. Observed target-day weather supports conditional prediction, and neither mode establishes a causal weather effect. No 2026 activity labels are available to verify 2026 accuracy. Report the baseline alongside HGB, including periods where the baseline performs better. See [training execution and report outputs](data/README.md#full-history-forecast-training).
 
 ## Validation
 
@@ -100,8 +112,9 @@ uv.lock                 Shared Python dependency lockfile
 .streamlit/config.toml  Streamlit configuration and theme
 tests/                  App, database, and data preparation tests
 scripts/                Validation and server smoke checks
-notebooks/              Dataset exploration and location forecast POC notebooks
+notebooks/              Dataset exploration, forecast comparison and training notebooks
 data/                   Local source and analysis artifacts
+models/location_forecast/ Local trained forecast bundle (ignored by Git)
 ```
 
 See [the domain glossary](CONTEXT.md) and [the area-grain decision](docs/adr/0001-compare-source-zip-areas.md) for the meaning and scope of application data. Dependency versions are recorded in `pyproject.toml` and `uv.lock`.
@@ -115,7 +128,17 @@ docker build --tag sitesense:local .
 docker run --rm --publish 127.0.0.1:8501:8501 sitesense:local
 ```
 
-This image contains the app and database driver. PostgreSQL runs separately; deployments supply `DATABASE_URL` through their secret store and explicitly apply migrations and import source data before exploring locations. An unconfigured or empty database shows setup guidance. Database provisioning does not train or validate models.
+This image contains the app and database driver. PostgreSQL runs separately; deployments supply `DATABASE_URL` through their secret store and explicitly apply migrations and import source data before exploring historical locations. An unconfigured or empty database shows setup guidance on those screens. Database provisioning does not train or validate models.
+
+Forecast artifacts are ignored by Git and are not included in the image. Run notebook 04 first and copy or mount its complete trusted `models/location_forecast/` bundle at `/app/models/location_forecast/`. For a local image:
+
+```sh
+docker run --rm --publish 127.0.0.1:8501:8501 \
+  --mount type=bind,source="$(pwd)/models/location_forecast",target=/app/models/location_forecast,readonly \
+  sitesense:local
+```
+
+Keep the runtime dependency versions compatible with the bundle's manifest; retrain after incompatible version changes. Demand forecast remains available independently of the historical database setup.
 
 ## Project principles
 

@@ -68,6 +68,40 @@ uv run --frozen --group notebooks jupyter nbconvert \
 
 Keep source notebook outputs empty. CSVs, the manifest and `03_location_forecast_poc.executed.ipynb` are saved under `data/processed/location_forecast_poc/` and ignored by Git.
 
+## Full history forecast training
+
+[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb) follows the POC comparison with a reportable training workflow and the model bundle used by **Demand forecast**. Run notebooks 01 and 02 first; notebook 04 reads the verified local Yelp and ACIS files without PostgreSQL or additional downloads. Use the same notebook environment and **Restart Kernel and Run All**.
+
+The steps verify source fingerprints, build county-based metro/category cohorts, aggregate daily check-ins, validate station weather, evaluate HGB against the calendar baseline, refit on the full usable history, and verify exported artifacts. Categories remain Restaurants and Day Spas in Philadelphia, Nashville and Tampa. This is the full available history within that declared scope, not every Yelp city or industry.
+
+Evaluation selects its cohort using activity through 2019, fits on 2010–2019 and validates on 2020. It keeps that catalog, refits through 2020 and tests on 2021. Preprocessing and calendar references are fitted within each training period. This is an exploratory recent-year backtest: 2020–2021 were previously inspected as stress periods, so they are not untouched confirmatory holdouts. Observed target-day weather makes these conditional prediction metrics. HGB settings remain fixed from the notebook 03 comparison; the calendar baseline is retained as a benchmark. Report its results even when it beats HGB. The final model uses an expanded cohort selected within the final training period and all complete usable weather/label rows from 2010-01-01 through 2022-01-18. The two December 2009 events and the censored January 19 archive day are excluded. January 1–18, 2022 remains in training. Historical evaluation metrics belong to the evaluation catalog; they do not establish held-out accuracy for the expanded final catalog or for 2026.
+
+Features contain only metro, category, latitude/longitude, calendar month/weekday and `tmax_c`, `tmin_c`, `precip_mm`. Activity supplies the target, recorded check-ins per historical cohort business per day, and training weights. Cohort business counts, activity history and lags are excluded from predictors. Missing or unsuitable weather is excluded rather than treated as zero. Source-local activity dates are aligned with provider report dates under an explicit research assumption; this is not a validated causal weather relationship.
+
+To execute and retain the reporting copy:
+
+```sh
+mkdir -p data/processed/full_history_forecast
+uv run --frozen --group notebooks jupyter nbconvert \
+  --to notebook --execute --ExecutePreprocessor.timeout=1800 \
+  --output=04_full_history_forecast_training.executed \
+  --output-dir=data/processed/full_history_forecast notebooks/04_full_history_forecast_training.ipynb
+```
+
+Keep source notebook outputs empty. The executed copy is saved at `data/processed/full_history_forecast/04_full_history_forecast_training.executed.ipynb`. Each timestamped `run_<timestamp>/` directory contains `report.md`, `evaluation_metrics.csv`, `evaluation_segments.csv`, `evaluation_predictions.csv`, `annual_coverage.csv`, `cohort_comparison.csv`, `final_training_summary.csv`, figures and a provenance `manifest.json`. Use the executed copy and the run's report together when preparing a presentation. The final fitted bundle is:
+
+| File | Purpose |
+| --- | --- |
+| `models/location_forecast/model.joblib` | Fitted HGB preprocessing/model pipeline |
+| `models/location_forecast/locations.csv` | Final eligible location/category catalog |
+| `models/location_forecast/weather_daily.csv` | Station weather for exact-day observed predictions |
+| `models/location_forecast/baseline.csv` | Full-training historical calendar comparison |
+| `models/location_forecast/manifest.json` | Training bounds, features, evaluation scope, versions and artifact hashes |
+
+The app verifies the bundle before loading it and never trains or reads activity during prediction. Choose any date and supply weather, or choose a date with complete observed station weather; observed mode reports areas excluded for missing weather. Both modes rank known source areas by the expected recorded daily rate. There is no weather forecast service or 2026 accuracy validation.
+
+Reports and model artifacts stay local and are ignored by Git. A fresh checkout or deployment must run notebook 04 or receive its complete trusted bundle at the expected model path. Run the local app from the repository root; the container expects `/app/models/location_forecast/`. Match the recorded runtime package versions when transferring artifacts; incompatible or incomplete bundles show setup guidance in the UI.
+
 ## Local files and reruns
 
 Use the same layout for both datasets: `data/downloads/` holds cached archives, `data/raw/<dataset>/` holds source tables used by the importer, and `data/processed/<dataset>/` holds exploration results and executed notebooks. Local dataset names are `yelp` and `climate`; the Drive archive names in the source links remain unchanged.
@@ -82,6 +116,8 @@ Use the same layout for both datasets: `data/downloads/` holds cached archives, 
 | `data/processed/yelp/` | Yelp coverage/activity CSVs and `exploration_manifest.json`; plots are embedded in the executed notebook |
 | `data/processed/climate/` | Climate quality/coverage/scenario CSVs, figures and `manifest.json` |
 | `data/processed/location_forecast_poc/` | Forecast comparison/ranking CSVs, manifest and executed POC notebook |
+| `data/processed/full_history_forecast/` | Full-history training report, evaluation/coverage exports and executed notebook |
+| `models/location_forecast/` | Trusted fitted model and catalog/weather/baseline bundle used by Demand forecast |
 
 The Yelp ZIP contains a gzip-compressed TAR. Notebook 01 streams it once to stage the required tables; it does not extract complete review, user or tip tables. Subsequent runs reuse staged files only when the archive, sample size and staged fingerprints match. The review prefix is descriptive and is not a random sample.
 

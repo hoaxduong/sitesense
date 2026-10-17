@@ -1,8 +1,9 @@
 # Data and UI audit — 2026-10-11
 
-This snapshot was checked against the local PostgreSQL database, importer metadata,
-source files, and the latest location forecast notebook outputs. Database queries
-were read-only; no import, migration, download, or model training was run.
+The October 11 snapshot below was checked against the local PostgreSQL database,
+importer metadata, source files, and location forecast POC outputs. Database
+queries were read-only; no import, migration, download, or model training was run
+during that audit. The forecast integration update is dated separately below.
 
 ## Imported evidence
 
@@ -88,20 +89,23 @@ periods are never presented as recorded zero activity.
 
 ## Populated screens
 
+The historical rows describe the October 11 audit; Demand forecast reflects the
+October 13 integration described below.
+
 | Screen | Available content | Hidden until supported |
 | --- | --- | --- |
 | Site ranking | Recorded activity order, ZIP centers, weekly counts, valid YoY, snapshot ratings, nearby listed businesses, factual area details, CSV | Composite scores, scoring weights, inferred sensitivity, AI advice |
 | Customer activity | Weekly history, weekday/hour pattern, calendar-normalized monthly activity, annual metro share, factual summary | Undefined peaks, seasonality, or shares; charts without usable activity |
 | Weather observations | Mapped distance, accepted station summaries, monthly observed temperature and precipitation with report coverage | Event effects, significance, uncertainty, inferred sensitivity, mock controls |
 | Compare sites | Recorded indicators, business snapshots, monthly activity, CSV | Review growth, composite dimensions, unsupported recommendations |
-| Demand forecast | No applicable fitted model is available to this app | Entire navigation entry and illustrative forecasts |
+| Demand forecast | Locally trained HGB predictions, historical calendar baseline, weather input, area coverage and CSV | Results without a compatible bundle; causal effects, calibrated intervals and new-store success |
 
 Optional fields with no usable values are omitted. Recorded zero counts and zero
 rainfall remain real observations. Ratings and operating status describe the
 source snapshot; neither is presented as a historical trend. Ranking by recorded
 check-ins compares historical activity and does not predict new-store success.
 
-## Forecast research boundary
+## Forecast research boundary — October 11 POC
 
 Latest verified daily POC: `data/processed/location_forecast_poc/run_20261011T022411021582Z/`.
 Its manifest is complete. All seven source hashes, twelve output hashes, notebook,
@@ -119,11 +123,119 @@ with no serialized fitted model for arbitrary app requests.
 Validation selected the calendar baseline. Its 2019 test Poisson deviance is
 0.0566424 versus 0.0587978 for weather HGB (lower is better, using this experiment's
 per-business rate metric). Sample predictions for 2026 have no 2026 activity labels
-to assess their accuracy. These outputs remain research artifacts and cannot fill
-the app's ZIP forecast, calibrated intervals, forecast drivers, or recommendation
-sections without further scope-compatible work.
+to assess their accuracy. These outputs remain research artifacts. Notebook 04
+and the integration below provide a fitted model with an explicit separate
+catalog; calibrated intervals, causal forecast drivers and new-store success
+remain unsupported.
 
-## Validation of the UI changes
+## Forecast integration update — 2026-10-13
+
+[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb)
+trains and exports the model consumed by the new Demand forecast navigation entry.
+The page is independent of database-backed historical screens. It shows training
+instructions if the local bundle is absent or incompatible, and does not train on
+page requests. The bundle's manifest records training bounds, exact predictors,
+evaluation scope, runtime versions and file hashes.
+
+The chosen HGB weather configuration comes from the earlier comparison. The
+current temporal evaluation selects its cohort and trains on 2010–2019,
+validates on 2020, then keeps that catalog and refits through 2020 for the 2021
+test. Preprocessing and calendar references use only each training period; HGB
+settings stay fixed. This is an exploratory recent-year backtest because
+2020–2021 were already inspected as stress periods in the first execution below.
+The calendar baseline remains visible as a benchmark, including when it performs
+better. Observed target-day weather supports conditional prediction; these metrics
+do not assess weather forecasts available in advance.
+
+The final refit includes all usable labeled weather days from 2010-01-01 through
+2022-01-18 within the three county-based metros and two categories. January 1–18
+is retained; the censored last archive day, January 19, is excluded. Final cohort
+selection uses that full training period and can expand the catalog. Earlier
+evaluation scores refer to the evaluation catalog, not an independent test of
+every area in the final catalog. The raw source inventory is historical and does
+not establish current operating businesses.
+
+Runtime features are metro, category, coordinates, month, weekday and three daily
+weather values. Activity is used only for cohort construction, training labels,
+training weights and scoring held-out results. Prediction reads the fitted model,
+location catalog, weather and calendar baseline, with no activity reads or lag
+features. The score is expected recorded check-ins per historical cohort business
+per day, for screening known source ZIP areas.
+
+Users can enter any date with supplied weather or use complete observed station
+weather for that day. Observed mode excludes and counts candidates with missing
+weather; supplied mode applies one scenario across the selected metro. Results
+show the baseline alongside HGB and can be downloaded as CSV. The app does not
+fetch a weather forecast, claim causal weather effects, estimate revenue, or
+predict new-store success. No 2026 activity labels exist to verify 2026 accuracy.
+
+Training reports are under `data/processed/full_history_forecast/`; the app loads
+`models/location_forecast/`. Both are ignored by Git. Fresh checkouts and
+deployments need explicit training or a complete trusted compatible model bundle;
+database provisioning and imports alone do not create it. The final notebook
+manifest and executed copy provide the cohort counts and coverage needed for a
+report, separately from the October 11 database snapshot above.
+
+### Recent-year execution evidence — 2026-10-13
+
+The run `run_20261013T140844558781Z` completed all 17 code cells under the
+updated protocol. Its evaluation catalog, selected through December 31, 2019,
+has 575 area/category groups and 26,659 business/category rows (26,649 distinct
+businesses). The final catalog has 580 groups after selection over the full
+training period. The final fit still uses 2,469,405 complete daily rows through
+January 18, 2022. Model, catalog, calendar baseline and weather artifact hashes
+are unchanged from the initial full-history run; the manifest now records the
+recent-year evaluation protocol and results.
+
+Lower values are better. Rate MAE uses recorded check-ins per historical cohort
+business per day.
+
+| Assessment | HGB Poisson deviance | Calendar baseline Poisson deviance | HGB rate MAE | Calendar baseline rate MAE |
+| --- | ---: | ---: | ---: | ---: |
+| Validation 2020 | 0.044353 | 0.043710 | 0.027141 | 0.025968 |
+| Test 2021 | 0.040052 | 0.038645 | 0.025250 | 0.023767 |
+
+The calendar baseline has lower deviance and MAE in both periods. These results
+do not demonstrate an accuracy gain from the HGB weather configuration. The HGB
+remains the previously chosen weather experiment; its settings were not tuned
+using the 2021 results. Because both years had already been inspected as stress
+periods, this is an exploratory conditional backtest, not an untouched
+confirmatory test. The final model's unchanged full-history fit is separate from
+this held-out evaluation, and no 2026 accuracy is established.
+
+### Previous execution evidence — 2026-10-13
+
+The initial run, `run_20261013T133627096499Z`, used training through 2017,
+validation on 2018, a refit through 2018 for the 2019 test, and separate 2020–2021
+stress periods. Its counts and results below describe that original run; the
+current notebook uses the recent-year protocol above.
+
+The full training notebook completed all 17 code cells. The final catalog has
+580 area/category groups and 28,679 business/category rows (28,669 distinct
+businesses), compared with 547 groups and 23,534 business/category rows in the
+training-selected evaluation catalog. The final daily panel contains 2,552,580
+group/date keys; 2,469,405 have complete usable weather and enter the final fit,
+while 83,175 are excluded for weather quality or missingness. Training retains
+January 1–18, 2022. Across the full source archive, the excluded boundary dates
+contain two December 2009 timestamps and 402 timestamps on January 19, 2022.
+
+Historical evaluation metrics below apply to the earlier evaluation catalog,
+before the final full-history fit. Lower values are better; rate MAE uses recorded
+check-ins per cohort business per day.
+
+| Assessment | HGB Poisson deviance | Calendar baseline Poisson deviance | HGB rate MAE | Calendar baseline rate MAE |
+| --- | ---: | ---: | ---: | ---: |
+| Validation 2018 | 0.051113 | 0.051476 | — | — |
+| Test 2019 | 0.046149 | 0.046122 | 0.033395 | 0.031224 |
+
+HGB slightly improves validation deviance, while the calendar baseline slightly
+improves test deviance and has lower test MAE. HGB's separate 2020 and 2021 stress
+deviances are 0.051563 and 0.050241, with rate MAE 0.031367 and 0.030841. These
+results do not establish a consistent weather improvement or verify 2026
+accuracy. The saved report and provenance manifest retain the precise metrics,
+coverage and catalog scope.
+
+## Validation of the October 11 UI changes
 
 - Required check: lockfile, Ruff, mypy, 163 tests passing (24 isolated database
   integration tests skipped without `TEST_DATABASE_URL`), source distribution,

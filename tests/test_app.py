@@ -181,10 +181,23 @@ def test_imported_views_render_real_evidence_without_mock_sections(
     assert any("Check-ins are an activity proxy" in item.value for item in app.caption)
 
 
-def test_forecast_page_is_hidden_until_predictions_are_available(imported_data: None) -> None:
+def test_forecast_page_is_available_without_database_activity(
+    imported_data: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sitesense import forecast
+
+    monkeypatch.setattr(forecast, "MODEL_DIR", APP_FILE.parent / "models" / "missing-test-model")
     app = _app()
-    with pytest.raises(ValueError):
-        app.switch_page("src/sitesense/app_pages/demand_forecast.py")
+    monkeypatch.setattr(
+        repository,
+        "get_import_revision",
+        lambda: pytest.fail("Forecast must not load database activity or catalog filters"),
+    )
+    app = _page(app, "demand_forecast")
+    assert not app.exception
+    assert app.title[0].value == "Demand forecast"
+    assert app.info[0].value == "Forecast model unavailable"
+    assert not app.metric
 
 
 def test_page_date_ranges_persist_independently_while_city_filters_are_shared(

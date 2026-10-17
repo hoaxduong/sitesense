@@ -1626,9 +1626,14 @@ name = "sitesense"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "pandas" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydeck" },
+    { name = "scikit-learn" },
     { name = "streamlit" },
+    { name = "threadpoolctl" },
 ]
 
 [package.dev-dependencies]
@@ -1645,16 +1650,18 @@ notebooks = [
     { name = "nbclient" },
     { name = "nbconvert" },
     { name = "nbformat" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "scikit-learn" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "joblib", specifier = ">=1.4,<2" },
+    { name = "numpy", specifier = ">=2,<3" },
+    { name = "pandas", specifier = ">=2.2,<4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydeck", specifier = ">=0.9.3,<1" },
+    { name = "scikit-learn", specifier = ">=1.7,<2" },
     { name = "streamlit", specifier = ">=1.54,<2" },
+    { name = "threadpoolctl", specifier = ">=3,<4" },
 ]
 
 [package.metadata.requires-dev]
@@ -1671,9 +1678,6 @@ notebooks = [
     { name = "nbclient", specifier = ">=0.10,<1" },
     { name = "nbconvert", specifier = ">=7.16,<8" },
     { name = "nbformat", specifier = ">=5.10,<6" },
-    { name = "numpy", specifier = ">=2,<3" },
-    { name = "pandas", specifier = ">=2.2,<4" },
-    { name = "scikit-learn", specifier = ">=1.7,<2" },
 ]
 
 [[package]]

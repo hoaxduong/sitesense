@@ -79,8 +79,20 @@ def main() -> None:
                     assert app.header[0].value == title
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric
+                app.switch_page("src/sitesense/app_pages/demand_forecast.py").run()
+                assert not app.exception, [error.message for error in app.exception]
+                assert app.title[0].value == "Demand forecast"
+                if any(button.label == "Predict" for button in app.button):
+                    app.button(key="forecast_predict").click().run()
+                    assert not app.exception, [error.message for error in app.exception]
+                    assert app.metric
+                    assert app.dataframe
+                else:
+                    assert app.info[0].value == "Forecast model unavailable"
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, four populated pages, and safe database setup.")
+            print(
+                "Smoke passed: Streamlit server, four historical pages, forecast, and safe setup."
+            )
         finally:
             process.terminate()
             try:

@@ -244,9 +244,18 @@ def render_app() -> None:
             st.Page(
                 pages / "compare_sites.py", title="Compare sites", icon=":material/compare_arrows:"
             ),
+            st.Page(
+                pages / "demand_forecast.py",
+                title="Demand forecast",
+                icon=":material/online_prediction:",
+            ),
         ],
         position="sidebar",
     )
+    if page.title == "Demand forecast":
+        st.title(page.title, icon=page.icon)
+        page.run()
+        return
     st.title("SiteSense AI")
     st.caption("Explore locations, activity, and weather.")
     st.header(page.title, icon=page.icon)
