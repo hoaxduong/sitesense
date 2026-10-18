@@ -177,6 +177,12 @@ def prepare_reference(run_directory: Path, directory: Path) -> Path:
     return output
 
 
+def verified_training_manifest(directory: Path) -> dict[str, Any]:
+    """Return the parent manifest only after verifying its complete model/cohort chain."""
+    files, _, _ = _verified_files(directory, directory / "cohort", "parent_manifest.json")
+    return _json_object(files["parent_manifest.json"])
+
+
 def load_reference(
     directory: Path,
     filters: Filters,
