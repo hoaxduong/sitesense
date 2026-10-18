@@ -78,6 +78,23 @@ are never multiplied by the current listed-business snapshot. Missing weather is
 not interpolated or replaced with zero, and forecast activity never enters the
 historical rain-day association calculation.
 
+## Scientific analysis
+
+A collapsed, lazy panel follows the existing time chart on Location map and the comparison CSV on Compare sites. It uses the selected map ZIP or the current comparison ZIPs without changing their controls. A nested fragment keeps analysis controls independent of the map; chart and weather choices persist across pages. Cached city-level evaluation/model-response data is filtered by selected ZIP after loading, so changing focus does not reload that evidence. The shared Date range controls descriptive charts and sampled ICE contexts; saved evaluation uses its explicitly selected historical period instead.
+
+- **Box plot:** exact recorded cohort check-ins per 100 original cohort businesses per day when every selected ZIP has a verified reference; otherwise all selected ZIPs use raw recorded counts. It groups paired dates by rain or temperature, showing Q1/median/Q3, Tukey 1.5-IQR whiskers, and outliers. Groups below eight paired days show points only. Zero-activity days and zero rain remain valid; missing weather stays missing.
+- **Weather relationship:** same-day recorded activity/weather pairs with up to eight equal-width weather bins. Bin means require eight days. Exploratory 95% percentile confidence intervals resample calendar-week clusters 300 times with a fixed seed and require four contributing weeks. Summaries use all pairs; at most 1,500 daily points are drawn. These unadjusted associations are neither causal effects nor prediction intervals.
+- **Calendar heatmap:** daily means by month of year and weekday, separately for each ZIP with a shared color domain. It uses recorded dates including true zero days; blank cells mean no recorded dates. It pools selected years and needs no weather observations.
+- **Predicted versus observed:** saved HGB forward-time predictions against their original recorded labels, in check-ins per 100 evaluation-cohort businesses per day. Both axes share a domain and include the perfect-prediction diagonal.
+- **Residuals:** recorded minus predicted activity, plotted against predicted activity or exact-date evaluation-station weather. Positive residuals indicate underprediction. The zero reference and evaluated/plotted row counts expose missing weather rather than substituting values.
+- **Weather response (ICE):** the trusted current model predicts over a station training-weather 5th–95th percentile grid. Thin lines vary one weather input while holding location, calendar, and other weather fixed for up to five observed-day contexts, evenly sampled from the last 30 available days within the selected dates. Temperature grids also satisfy all contexts' high/low constraints. The thick line averages these sampled curves; it is not a population PDP, causal effect, or accuracy measurement.
+
+Daily descriptive weather averages the available mapped stations independently for each variable and retains contributing-station counts in the CSV. Forecast estimates never become observed activity in these analyses. If verified cohort activity cannot be loaded, the UI labels the raw-count fallback. A forecast-only selection therefore has no recorded distribution, relationship, or calendar cells.
+
+Evaluation preparation uses `scripts/prepare_scientific_evidence.py` and the original verified notebook 04 run. It checks the installed model/source/cohort hash chain, original prediction and evaluation-catalog hashes, and the exact evaluation protocol. Only saved HGB validation 2020 and test 2021 rows are retained; rendering never re-predicts training dates with the final model or retrains. Evaluation matches city, state, category, ZIP and original evaluation N; a current business snapshot or final-cohort denominator is never substituted. Missing or mismatched evidence disables diagnostics with an explanation. These previously examined years remain exploratory backtests of the earlier evaluation fit, not an untouched assessment of the expanded final model. Deployment must include the ignored `cohort/` and `evaluation/` directories with the trusted bundle.
+
+Analysis CSV downloads retain daily inputs/summary rows or evaluation/model-response metadata, including denominators, dates, weather inputs and provenance where applicable. Existing page exports remain separate.
+
 ## Boundaries
 
 The bundled GeoJSON comes from the U.S. Census Bureau's

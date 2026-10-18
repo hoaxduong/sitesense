@@ -20,6 +20,7 @@ from sitesense import (
     forecast_ui,
     forecast_views,
     repository,
+    scientific_views,
     zip_boundaries,
 )
 from sitesense.analytics import haversine_km, summarize_activity
@@ -1414,3 +1415,4 @@ def render_comparison() -> None:
                     "undefined indices are omitted."
                 )
     _csv_download([_area_export(summary, context) for summary in selected], context, "comparison")
+    scientific_views.render(context, tuple(selected_ids), "compare")

@@ -22,6 +22,8 @@ from sitesense import (
     forecast_ui,
     location_map,
     repository,
+    scientific_evidence,
+    scientific_views,
     ui,
     zip_boundaries,
 )
@@ -57,6 +59,9 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _zip_boundaries.clear()
     ui._forecast_estimates.clear()
     ui._recorded_cohort_activity.clear()
+    scientific_views._evaluation.clear()
+    scientific_views._response.clear()
+    scientific_views._trend.clear()
 
 
 @pytest.fixture
@@ -2411,3 +2416,130 @@ def test_import_revision_refreshes_location_map_station_reports(
     app.run()
     assert not app.exception
     assert calls == ["first", "second"]
+
+
+def test_scientific_analysis_is_lazy_on_both_existing_pages(city_weather_map: None) -> None:
+    with (
+        patch.object(scientific_views, "_historical") as history,
+        patch.object(scientific_views, "_evaluation") as evaluation,
+        patch.object(scientific_views, "_response") as response,
+    ):
+        app = _app()
+        assert not app.exception
+        assert any(expander.label == "Scientific analysis" for expander in app.expander)
+        app = _page(app, "compare_sites")
+        app.multiselect(key="compare_areas").set_value([1, 2]).run()
+        assert not app.exception
+        assert any(expander.label == "Scientific analysis" for expander in app.expander)
+        history.assert_not_called()
+        evaluation.assert_not_called()
+        response.assert_not_called()
+
+
+def test_scientific_weather_charts_use_same_zip_actual_cohort_and_keep_page_controls(
+    verified_cohort_activity: list[tuple[Filters, bool, tuple[str, ...]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        location_map,
+        "load_daily_station_weather",
+        lambda cells, start, end: {
+            "cell-1": {
+                date.fromordinal(i): {"pcpn": 0.0, "tmax": 10.0, "tmin": 2.0}
+                for i in range(start.toordinal(), end.toordinal() + 1)
+            }
+        },
+    )
+    app = _app()
+    app.selectbox(key="map_area").set_value(1).run()
+    # AppTest Expander blocks do not serialize open state like browser widgets.
+    app.session_state["map_science_open"] = True
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="science_weather_chart").value == "Box plot"
+    assert app.selectbox(key="map_area").value == 1
+    assert len(verified_cohort_activity) == 1
+    with patch("sitesense.scientific_views.st.vega_lite_chart", wraps=st.vega_lite_chart) as plots:
+        app.session_state["map_science_open"] = True
+        app.selectbox(key="science_weather_chart").set_value("Weather relationship").run()
+        assert not app.exception
+        assert plots.call_count == 2
+        rows, spec = plots.call_args.args[:2]
+        observations = [row for row in rows if row["Kind"] == "Daily"]
+        assert sum(r["Recorded check-ins"] for r in observations) == 3
+        assert all(r["Cohort businesses"] == 2 for r in observations)
+        assert sum(r["Activity"] for r in observations) == 150
+        assert all(r["Weather value"] == 0 for r in observations)
+        assert spec["encoding"]["color"]["field"] == "ZIP area"
+        app.session_state["map_science_open"] = True
+        app.selectbox(key="science_weather_chart").set_value("Calendar heatmap").run()
+        assert not app.exception
+        assert any("pooled by month of year" in caption.value for caption in app.caption)
+    app = _page(app, "compare_sites")
+    app.multiselect(key="compare_areas").set_value([1, 2]).run()
+    app.session_state["compare_science_open"] = True
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="science_weather_chart").value == "Calendar heatmap"
+    assert len(verified_cohort_activity) == 1
+    app.session_state["compare_science_open"] = True
+    app.selectbox(key="date_preset").set_value("Forecast period preview").run()
+    assert not app.exception
+    assert any("No recorded activity in this date range" in item.value for item in app.info)
+    assert app.multiselect(key="compare_areas").value == [1, 2]
+
+
+def test_scientific_diagnostics_reuse_saved_evaluation_and_never_repredict(
+    city_weather_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved = scientific_evidence.Evaluation(
+        (
+            {
+                "Area ID": 1,
+                "ZIP area": "Area 1 (19001)",
+                "Date": "2021-01-01",
+                "Recorded": 50.0,
+                "Predicted": 60.0,
+                "Residual": -10.0,
+                "Recorded check-ins": 5,
+                "Cohort businesses": 10,
+                "Evaluation period": "test_2021",
+                "Trained through": "2020-12-31",
+                "Precipitation mm": 0.0,
+                "Daily high °C": 10.0,
+            },
+        ),
+        parent_sha256="a" * 64,
+    )
+    with (
+        patch.object(scientific_evidence, "load_evaluation", return_value=saved) as load,
+        patch.object(forecast, "predict_locations") as predict,
+    ):
+        app = _app()
+        app.selectbox(key="map_area").set_value(1).run()
+        app.session_state["map_science_open"] = True
+        app.session_state["science_family"] = "Model diagnostics"
+        app.run()
+        assert not app.exception
+        assert load.call_count == 1
+        assert any("independent of the shared Date range" in c.value for c in app.caption)
+        with patch(
+            "sitesense.scientific_views.st.vega_lite_chart", wraps=st.vega_lite_chart
+        ) as plots:
+            app.session_state["map_science_open"] = True
+            app.selectbox(key="science_model_chart").set_value("Residuals").run()
+            assert not app.exception
+            assert load.call_count == 1
+            rows, _ = plots.call_args.args[:2]
+            assert rows[0]["Residual"] == -10
+            assert rows[0]["Cohort businesses"] == 10
+            app.session_state["map_science_open"] = True
+            app.selectbox(key="science_residual_x").set_value("Precipitation").run()
+            assert not app.exception
+            assert plots.call_args.args[0][0]["X"] == 0
+        predict.assert_not_called()
+        app.session_state["map_science_open"] = True
+        app.selectbox(key="science_evaluation_period").set_value("Validation 2020").run()
+        assert not app.exception
+        assert load.call_count == 2

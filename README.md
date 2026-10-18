@@ -77,6 +77,19 @@ If weather is omitted, the notebook uses complete observed ACIS values for the r
 
 Notebook 03 preserves the original model comparison. Its county-based historical cohorts differ from the app's city-only ZIP groups, and its saved predictions are research outputs. Use notebook 04 below to train the fitted model used by the prediction modules. See [the data and UI audit](docs/data-ui-audit.md) for coverage and research boundaries.
 
+## Scientific analysis
+
+Both existing pages include a collapsed **Scientific analysis** panel below their current charts. Location map analyzes the selected ZIP; Compare sites uses the same two to four comparison ZIPs. Weather patterns provides a box plot, weather/activity relationship with exploratory confidence intervals, and a month-by-weekday heatmap using recorded activity only. Model diagnostics provides predicted-versus-observed, residual, and sampled ICE weather-response charts. Each chart has a separate analysis CSV download and explains its dates, units, sample coverage, and limitations. No analysis runs while the panel is closed.
+
+Saved backtest diagnostics require verified evidence from the original notebook 04 run that produced the installed forecast bundle. Prepare it explicitly:
+
+```sh
+uv run --frozen python scripts/prepare_scientific_evidence.py \
+  --run-directory data/processed/full_history_forecast/<original-run-directory>
+```
+
+This verifies source/artifact hashes and stores compressed HGB evaluation rows plus their original evaluation catalog under `models/location_forecast/evaluation/`. Copy or mount the whole bundle, including `cohort/` and `evaluation/`, for deployment. Preparation does not retrain or change model weights. Diagnostics use fixed validation 2020 or test 2021 predictions and the earlier evaluation cohort; their period is independent of the shared Date range and does not measure current-model accuracy. Missing evidence leaves the rest of the UI usable. See [chart methods and boundaries](docs/zip-weather-map.md#scientific-analysis).
+
 ## Train the forecast model
 
 Open [04 — Full history forecast training](notebooks/04_full_history_forecast_training.ipynb) after notebooks 01 and 02, and use **Restart Kernel and Run All**. The reporting notebook documents source verification, cohort selection, daily labels and weather quality, temporal evaluation, the final fit, and artifact verification. It needs the local raw files but no PostgreSQL connection.

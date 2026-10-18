@@ -11,7 +11,15 @@ import psycopg
 import pydeck as pdk  # type: ignore[import-untyped]
 import streamlit as st
 
-from sitesense import exploration, forecast_range, forecast_views, repository, ui, zip_boundaries
+from sitesense import (
+    exploration,
+    forecast_range,
+    forecast_views,
+    repository,
+    scientific_views,
+    ui,
+    zip_boundaries,
+)
 from sitesense.database import ConfigurationError
 from sitesense.location_weather import DailyWeather, load_daily_station_weather
 from sitesense.models import ActivityRecord, AreaSummary, StationWeatherSummary, WeatherCell
@@ -1088,10 +1096,12 @@ def render_location_map() -> None:
     has_estimates = bool(estimates.estimated_dates)
     if has_estimates:
         _render_estimated_map(context, estimates, activity_available=covered is not None)
+        _render_scientific_analysis(context)
         _ensure_current_import(context)
         return
     if covered is None:
         _render_unavailable_map(context, estimates)
+        _render_scientific_analysis(context)
         _ensure_current_import(context)
         return
     start, end = covered
@@ -1228,7 +1238,14 @@ def render_location_map() -> None:
     exploration.render_comparison_selection(context.summaries)
     _render_ranking(context, ranked, base, metric, estimates=estimates)
     _render_time_panels(context, selected, stations, start, end)
+    _render_scientific_analysis(context)
     _ensure_current_import(context)
+
+
+def _render_scientific_analysis(context: ui.ScreenContext) -> None:
+    selected_id = st.session_state.get("map_area")
+    ids = tuple(s.area.id for s in context.summaries if s.area.id == selected_id)
+    scientific_views.render(context, ids, "map")
 
 
 def forecast_map_properties(
