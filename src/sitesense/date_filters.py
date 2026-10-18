@@ -6,6 +6,7 @@ from sitesense.models import DateCoverage
 
 OVERVIEW = "Recorded activity overview"
 CUSTOM = "Custom range"
+FORECAST_DAYS = 30
 DATE_PRESETS = (
     OVERVIEW,
     "Seasonal patterns",
@@ -28,7 +29,9 @@ def preset_range(preset: str, coverage: DateCoverage) -> tuple[date, date]:
     if preset == "Seasonal patterns":
         return coverage.start_date, coverage.end_date
     if preset in ("History → forecast preview", "Forecast period preview"):
-        end = date.fromordinal(min(date.max.toordinal(), coverage.end_date.toordinal() + 7))
+        end = date.fromordinal(
+            min(date.max.toordinal(), coverage.end_date.toordinal() + FORECAST_DAYS)
+        )
         if preset == "Forecast period preview":
             start = date.fromordinal(min(date.max.toordinal(), coverage.end_date.toordinal() + 1))
         else:

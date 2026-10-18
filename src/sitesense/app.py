@@ -43,71 +43,81 @@ def _activity(filters: Filters, revision: str) -> tuple[ActivityRecord, ...]:
     return repository.load_activity(filters)
 
 
+def _set_date_draft(dates: tuple[date, date]) -> None:
+    st.session_state["date_start_draft"], st.session_state["date_end_draft"] = dates
+
+
 def _apply_date_preset(coverage: DateCoverage) -> None:
     preset = st.session_state["date_preset"]
     st.session_state.pop("date_range_error", None)
     if preset != CUSTOM:
         st.session_state["date_range"] = preset_range(preset, coverage)
-        st.session_state["applied_date_preset"] = preset
-    st.session_state["date_range_draft"] = st.session_state["date_range"]
+    _set_date_draft(st.session_state["date_range"])
 
 
 def _apply_custom_dates() -> None:
-    dates = st.session_state["date_range_draft"]
-    if not isinstance(dates, tuple) or len(dates) != 2:
+    dates = (st.session_state["date_start_draft"], st.session_state["date_end_draft"])
+    if not all(isinstance(day, date) for day in dates):
         st.session_state["date_range_error"] = "Select both the start and end date."
     elif dates[1] < dates[0]:
         st.session_state["date_range_error"] = "The end date must be on or after the start date."
     else:
         st.session_state["date_range"] = dates
-        st.session_state["applied_date_preset"] = CUSTOM
+        st.session_state["date_preset"] = CUSTOM
         st.session_state.pop("date_range_error", None)
-
-
-def _cancel_custom_dates() -> None:
-    st.session_state["date_preset"] = st.session_state["applied_date_preset"]
-    st.session_state["date_range_draft"] = st.session_state["date_range"]
-    st.session_state.pop("date_range_error", None)
 
 
 def _screen_dates(coverage: DateCoverage) -> tuple[date, date]:
     st.session_state.setdefault("date_preset", OVERVIEW)
-    st.session_state.setdefault("applied_date_preset", OVERVIEW)
     st.session_state.setdefault("date_range", default_activity_range(coverage))
     preset = st.session_state["date_preset"]
     if preset != CUSTOM:
         # Relative presets follow newly imported data; custom dates stay untouched.
-        st.session_state["date_range"] = preset_range(preset, coverage)
-        st.session_state["applied_date_preset"] = preset
-    st.selectbox(
-        "Date range",
+        dates = preset_range(preset, coverage)
+        if dates != st.session_state["date_range"]:
+            _set_date_draft(dates)
+        st.session_state["date_range"] = dates
+    st.session_state.setdefault("date_start_draft", st.session_state["date_range"][0])
+    st.session_state.setdefault("date_end_draft", st.session_state["date_range"][1])
+    st.markdown("**Date range**")
+    for label, key in (("Start date", "date_start_draft"), ("End date", "date_end_draft")):
+        st.date_input(
+            label,
+            min_value=date.min,
+            max_value=date.max,
+            key=key,
+            format="DD/MM/YYYY",
+            on_change=_apply_custom_dates,
+            persist_state="session",
+        )
+    st.pills(
+        "Date preset",
         DATE_PRESETS,
+        required=True,
+        wrap=True,
+        help=(
+            "History → forecast shows 30 recorded days and 30 forecast days. "
+            "Forecast shows the next 30 days."
+        ),
+        format_func=lambda value: {
+            OVERVIEW: "Overview",
+            "Seasonal patterns": "Seasonal patterns",
+            "History → forecast preview": "History → forecast",
+            "Forecast period preview": "Forecast",
+            "Latest recorded 7 days": "Latest 7 days",
+            "Latest recorded 30 days": "Latest 30 days",
+            "Latest recorded 90 days": "Latest 90 days",
+            CUSTOM: "Custom",
+        }[value],
         key="date_preset",
         on_change=_apply_date_preset,
         args=(coverage,),
         persist_state="session",
     )
-    if preset == CUSTOM:
-        st.session_state.setdefault("date_range_draft", st.session_state["date_range"])
-        with st.form("custom_date_range"):
-            st.date_input(
-                "Start and end dates",
-                min_value=date.min,
-                max_value=date.max,
-                key="date_range_draft",
-                persist_state="session",
-            )
-            with st.container(horizontal=True):
-                st.form_submit_button(
-                    "Apply", key="date_range_apply", on_click=_apply_custom_dates, type="primary"
-                )
-                st.form_submit_button(
-                    "Cancel", key="date_range_cancel", on_click=_cancel_custom_dates
-                )
     if error := st.session_state.get("date_range_error"):
         st.info(error)
     dates = st.session_state["date_range"]
-    st.caption(f"{dates[0]:%d %b %Y} – {dates[1]:%d %b %Y}")
+    st.caption(f"Applied: {dates[0]:%d %b %Y} – {dates[1]:%d %b %Y}")
     return dates[0], dates[1]
 
 

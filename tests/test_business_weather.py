@@ -211,6 +211,49 @@ def _weather_rows(frame: pd.DataFrame, series: str | None = None) -> pd.DataFram
     return weather[weather[measure] == series]
 
 
+def test_long_history_groups_activity_and_weather_by_year(
+    monkeypatch: pytest.MonkeyPatch, chart_inputs: dict[str, list[pd.DataFrame]]
+) -> None:
+    start, end = date(2010, 1, 1), date(2022, 1, 19)
+    monkeypatch.setattr(
+        repository,
+        "load_business_daily",
+        lambda *args: (BusinessDay("a", start, 1), BusinessDay("a", end, 3)),
+    )
+    monkeypatch.setattr(
+        views,
+        "load_daily_station_weather",
+        lambda *args: {STATION.weather_cell_id: {start: {"tmax": 10.0, "tmin": -5.0}}},
+    )
+    app = _weather_app(
+        filters=replace(FILTERS, start_date=start, end_date=end),
+        coverage=DateCoverage(start, end),
+    ).run()
+    assert not app.exception
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    weather, activity = spec["layer"]
+    axis = activity["encoding"]["x"]["axis"]
+    assert axis == weather["encoding"]["x"]["axis"]
+    assert axis["format"] == "%Y"
+    assert len(axis["values"]) == 13
+    assert activity["mark"]["type"] == "line"
+    assert "width" in weather["layer"][3]["mark"]["size"]["expr"]
+    frame = chart_inputs["timeline"][-1]
+    annual = _activity_rows(frame)
+    assert len(annual) == 13
+    assert annual["Recorded check-ins"].sum() == 4
+    assert annual["Period"].iloc[0] == "2010"
+    assert annual["Period"].iloc[-1] == "2022"
+    assert annual["Period end"].iloc[-1] == "2022-01-19"
+    assert any("totaled for each calendar year" in caption.value for caption in app.caption)
+    weather_rows = _weather_rows(frame)
+    assert set(weather_rows["Period"]) == set(annual["Period"])
+    observed = weather_rows[weather_rows["Observed readings"] > 0]
+    assert set(observed["Period"]) == {"2010"}
+    assert observed["Minimum"].iloc[0] == -5.0
+    assert observed["Maximum"].iloc[0] == 10.0
+
+
 def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     monkeypatch: pytest.MonkeyPatch, chart_inputs: dict[str, list[pd.DataFrame]]
 ) -> None:
@@ -275,7 +318,7 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     assert activity_layer["encoding"]["y"]["axis"]["title"] == "Recorded check-ins"
     assert activity_layer["encoding"]["y"]["axis"]["format"] == ",.0f"
     assert activity_layer["encoding"]["x"]["title"] == "Week"
-    assert activity_layer["mark"]["interpolate"] == "linear"
+    assert activity_layer["mark"]["interpolate"] == "monotone"
     assert (
         next(
             field
@@ -814,6 +857,8 @@ def test_shared_weather_timeline_keeps_actual_pairs_and_projected_tail_separate(
     spec = json.loads(page.get("vega_lite_chart")[0].proto.spec)
     assert spec["layer"][1]["resolve"]["scale"]["y"] == "shared"
     assert spec["layer"][1]["layer"][1]["mark"]["strokeDash"] == [6, 4]
+    assert spec["layer"][1]["layer"][0]["mark"]["interpolate"] == "monotone"
+    assert spec["layer"][1]["layer"][1]["mark"]["interpolate"] == "monotone"
     activity_axis = spec["layer"][1]["layer"][0]["encoding"]["y"]["axis"]
     assert activity_axis["orient"] == "left"
     assert spec["layer"][1]["layer"][1]["encoding"]["y"]["axis"] == activity_axis

@@ -25,6 +25,7 @@ from sitesense.models import Business, Filters, WeatherCell
 from sitesense.ui import ScreenContext
 from sitesense.weather_charts import (
     activity_period_rows,
+    calendar_grain,
     weather_boxplot_caption,
     weather_boxplot_display_rows,
     weather_boxplot_layer,
@@ -71,7 +72,7 @@ def _render_activity_weather_chart(
     """Align period activity totals with the same calendar bins as weather boxes."""
     if metric == "Precipitation (mm)":
         hourly_weather_rows = None
-    period = "week" if (end - start).days < 90 else "month"
+    period = calendar_grain(start, end)
     days = next(iter(days_by_metric.values()))
     rows = [
         dict(row, Series="Recorded check-ins", Axis="activity")
@@ -142,9 +143,17 @@ def _render_activity_weather_chart(
                     )
                 )
         rows.extend(projected_rows)
-    period_axis = {
+    calendar_periods = activity_period_rows([], start, end)
+    period_axis: dict[str, Any] = {
         "title": period.title(),
-        "format": "%d %b %Y" if period == "week" else "%b %Y",
+        "format": ("%d %b" if start.year == end.year else "%d %b %Y")
+        if period == "week"
+        else "%Y"
+        if period == "year"
+        else "%b %Y",
+        "labelAngle": 0,
+        "labelOverlap": "greedy",
+        "labelSeparation": 12,
         "values": [
             {
                 "year": midpoint.year,
@@ -155,8 +164,7 @@ def _render_activity_weather_chart(
                 "utc": True,
             }
             for midpoint in (
-                datetime.fromisoformat(row["Period midpoint"])
-                for row in activity_period_rows([], start, end)
+                datetime.fromisoformat(row["Period midpoint"]) for row in calendar_periods
             )
         ],
     }
@@ -254,11 +262,17 @@ def _render_activity_weather_chart(
         {"field": "Period end", "type": "temporal", "format": "%Y-%m-%d"},
         {"field": "Covered calendar days", "type": "quantitative", "format": ",.0f"},
     ]
+    box_width = f"min(18, width / {len(calendar_periods)} * 0.65)"
     for layer in weather_layer["layer"]:
         layer["encoding"]["tooltip"] = [*period_tooltip, *layer["encoding"]["tooltip"]]
+        # Fixed-width boxes overlap on long histories and narrow screens.
+        if layer["mark"]["type"] in {"bar", "tick"}:
+            layer["mark"]["size"] = {"expr": box_width}
+        elif layer["mark"]["type"] == "point":
+            layer["mark"]["size"] = {"expr": f"min(70, pow({box_width}, 2))"}
     activity_layer: dict[str, Any] = {
         "transform": [{"filter": "datum.Axis === 'activity'"}],
-        "mark": {"type": "line", "interpolate": "linear", "point": True},
+        "mark": {"type": "line", "interpolate": "monotone", "point": True},
         "encoding": {
             "x": {
                 "field": "Period midpoint",
@@ -297,7 +311,12 @@ def _render_activity_weather_chart(
     if projected_rows:
         projection_layer = {
             "transform": [{"filter": "datum.Axis === 'projection'"}],
-            "mark": {"type": "line", "interpolate": "linear", "point": True, "strokeDash": [6, 4]},
+            "mark": {
+                "type": "line",
+                "interpolate": "monotone",
+                "point": True,
+                "strokeDash": [6, 4],
+            },
             "encoding": {
                 **activity_layer["encoding"],
                 "y": dict(activity_layer["encoding"]["y"], field="Projected check-ins"),

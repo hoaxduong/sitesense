@@ -7,13 +7,28 @@ from statistics import fmean, quantiles
 from typing import Any
 
 
+def calendar_grain(start: date, end: date) -> str:
+    """Use readable calendar bins for short windows and long histories."""
+    span = (end - start).days
+    return "week" if span < 90 else "year" if span > 730 else "month"
+
+
 def _calendar_period(day: date, start: date, end: date) -> tuple[date, date, dict[str, Any]]:
     """Use one clipped calendar bin for activity totals and weather distributions."""
-    weekly = (end - start).days < 90
-    first = day - timedelta(days=day.weekday()) if weekly else day.replace(day=1)
+    grain = calendar_grain(start, end)
+    weekly = grain == "week"
+    first = (
+        day - timedelta(days=day.weekday())
+        if weekly
+        else day.replace(month=1, day=1)
+        if grain == "year"
+        else day.replace(day=1)
+    )
     last = (
         date.fromordinal(min(first.toordinal() + 6, date.max.toordinal()))
         if weekly
+        else first.replace(month=12, day=31)
+        if grain == "year"
         else first.replace(day=monthrange(first.year, first.month)[1])
     )
     lower, upper = max(start, first), min(end, last)
@@ -22,7 +37,13 @@ def _calendar_period(day: date, start: date, end: date) -> tuple[date, date, dic
         first,
         last,
         {
-            "Period": f"Week of {first:%Y-%m-%d}" if weekly else f"{first:%B %Y}",
+            "Period": (
+                f"Week of {first:%Y-%m-%d}"
+                if weekly
+                else f"{first:%Y}"
+                if grain == "year"
+                else f"{first:%B %Y}"
+            ),
             "Period start": lower.isoformat(),
             "Period end": upper.isoformat(),
             "Covered calendar days": (upper - lower).days + 1,
@@ -346,7 +367,7 @@ def weather_boxplot_layer(
 
 
 def weather_boxplot_caption(start: date, end: date) -> str:
-    period = "calendar week" if (end - start).days < 90 else "calendar month"
+    period = f"calendar {calendar_grain(start, end)}"
     return (
         f"Weather boxes summarize observations within each {period}, "
         "separately by source and station. "

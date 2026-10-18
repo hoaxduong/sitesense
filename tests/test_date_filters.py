@@ -39,8 +39,8 @@ def test_recorded_presets_clip_to_short_history_and_include_leap_day() -> None:
 @pytest.mark.parametrize(
     "preset,expected",
     [
-        ("History → forecast preview", (date(2026, 9, 10), date(2026, 10, 16))),
-        ("Forecast period preview", (date(2026, 10, 10), date(2026, 10, 16))),
+        ("History → forecast preview", (date(2026, 9, 10), date(2026, 11, 8))),
+        ("Forecast period preview", (date(2026, 10, 10), date(2026, 11, 8))),
     ],
 )
 def test_forecast_presets_select_uncovered_days_after_recorded_history(
@@ -50,15 +50,15 @@ def test_forecast_presets_select_uncovered_days_after_recorded_history(
     assert preset_range(preset, coverage) == expected
 
 
-def test_mixed_preview_clips_recorded_part_but_preserves_seven_uncovered_days() -> None:
+def test_mixed_preview_clips_recorded_part_but_preserves_thirty_uncovered_days() -> None:
     coverage = DateCoverage(date(2024, 2, 28), date(2024, 3, 1))
     assert preset_range("History → forecast preview", coverage) == (
         date(2024, 2, 28),
-        date(2024, 3, 8),
+        date(2024, 3, 31),
     )
     assert preset_range("Forecast period preview", coverage) == (
         date(2024, 3, 2),
-        date(2024, 3, 8),
+        date(2024, 3, 31),
     )
 
 
@@ -78,7 +78,7 @@ def test_activity_default_and_calendar_limits() -> None:
     assert previous_year(date.min) == _previous_year(date.min) == date.min
     assert preset_range("History → forecast preview", DateCoverage(date.min, date.min)) == (
         date.min,
-        date(1, 1, 8),
+        date(1, 1, 31),
     )
     assert preset_range("Forecast period preview", DateCoverage(date.max, date.max)) == (
         date.max,

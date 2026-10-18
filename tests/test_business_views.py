@@ -168,9 +168,10 @@ def _app() -> AppTest:
 
 
 def _custom_range(app: AppTest, start: date, end: date) -> AppTest:
-    app.selectbox(key="date_preset").set_value("Custom range").run()
-    app.date_input(key="date_range_draft").set_value((start, end))
-    return app.button(key="date_range_apply").click().run()
+    app.pills(key="date_preset").set_value("Custom range").run()
+    app.date_input(key="date_start_draft").set_value(start)
+    app.date_input(key="date_end_draft").set_value(end)
+    return app.run()
 
 
 def _category_table(app: AppTest):
@@ -213,7 +214,8 @@ def test_sidebar_inputs_follow_industry_flow_and_all_source_categories_are_ranke
     app = _app()
     assert not app.exception
     keys = [widget.key for widget in app.sidebar.selectbox]
-    assert keys[:4] == ["city", "category", "business_source_category", "date_preset"]
+    assert keys[:3] == ["city", "category", "business_source_category"]
+    assert app.sidebar.pills(key="date_preset").label == "Date preset"
     source = app.selectbox(key="business_source_category")
     assert source.label == "Source category"
     assert source.value == "All source categories"

@@ -205,9 +205,10 @@ def _page(app: AppTest, page: str) -> AppTest:
 
 
 def _custom_range(app: AppTest, selected: tuple[date, date]) -> AppTest:
-    app.selectbox(key="date_preset").set_value("Custom range").run()
-    app.date_input(key="date_range_draft").set_value(selected)
-    return app.button(key="date_range_apply").click().run()
+    app.pills(key="date_preset").set_value("Custom range").run()
+    app.date_input(key="date_start_draft").set_value(selected[0])
+    app.date_input(key="date_end_draft").set_value(selected[1])
+    return app.run()
 
 
 def _visible_text(app: AppTest) -> str:
@@ -403,14 +404,14 @@ def test_invalid_custom_draft_and_forecast_preset_preserve_business_selection(
     ids = _pick_two(app)
     focus = _identifier("Philadelphia", "Restaurants", 1)
     _focus_map(app, focus)
-    app.selectbox(key="date_preset").set_value("Custom range").run()
-    app.date_input(key="date_range_draft").set_value((date(2022, 1, 2),))
-    app.button(key="date_range_apply").click().run()
+    app.pills(key="date_preset").set_value("Custom range").run()
+    app.date_input(key="date_start_draft").set_value(date(2022, 1, 2))
+    app.date_input(key="date_end_draft").set_value(None)
+    app.run()
     assert not app.exception
     assert any("Select both the start and end date." == info.value for info in app.info)
     assert app.session_state["date_range"] == applied
-    app.button(key="date_range_cancel").click().run()
-    app.selectbox(key="date_preset").set_value("Forecast period preview").run()
+    app.pills(key="date_preset").set_value("Forecast period preview").run()
     assert not app.exception
     assert app.session_state["map_business"] == focus
     assert app.session_state["business_compare_ids"] == ids
@@ -763,27 +764,30 @@ def test_shared_date_presets_use_source_coverage_on_both_pages(
     imported_data: None, page: str
 ) -> None:
     app = _page(_app(), page)
-    assert app.selectbox(key="date_preset").options == [
-        "Recorded activity overview",
+    assert app.pills(key="date_preset").options == [
+        "Overview",
         "Seasonal patterns",
-        "History → forecast preview",
-        "Forecast period preview",
-        "Latest recorded 7 days",
-        "Latest recorded 30 days",
-        "Latest recorded 90 days",
-        "Custom range",
+        "History → forecast",
+        "Forecast",
+        "Latest 7 days",
+        "Latest 30 days",
+        "Latest 90 days",
+        "Custom",
     ]
-    assert app.selectbox(key="date_preset").value == "Recorded activity overview"
+    assert app.date_input(key="date_start_draft").label == "Start date"
+    assert app.date_input(key="date_end_draft").label == "End date"
+    assert app.pills(key="date_preset").value == "Recorded activity overview"
+    assert app.pills(key="date_preset").label == "Date preset"
     assert app.session_state["date_range"] == (date(2021, 1, 2), date(2022, 1, 1))
     for preset, expected in (
         ("Latest recorded 7 days", (date(2021, 12, 26), date(2022, 1, 1))),
         ("Latest recorded 30 days", (date(2021, 12, 3), date(2022, 1, 1))),
         ("Latest recorded 90 days", (date(2021, 10, 4), date(2022, 1, 1))),
         ("Seasonal patterns", (date(2014, 1, 1), date(2022, 1, 1))),
-        ("History → forecast preview", (date(2021, 12, 3), date(2022, 1, 8))),
-        ("Forecast period preview", (date(2022, 1, 2), date(2022, 1, 8))),
+        ("History → forecast preview", (date(2021, 12, 3), date(2022, 1, 31))),
+        ("Forecast period preview", (date(2022, 1, 2), date(2022, 1, 31))),
     ):
-        app.selectbox(key="date_preset").set_value(preset).run()
+        app.pills(key="date_preset").set_value(preset).run()
         assert not app.exception
         assert app.session_state["date_range"] == expected
         filters = app.session_state["screen_context"].filters
@@ -791,12 +795,12 @@ def test_shared_date_presets_use_source_coverage_on_both_pages(
     other = "compare_sites" if page == "location_map" else "location_map"
     app = _page(app, other)
     assert not app.exception
-    assert app.selectbox(key="date_preset").value == "Forecast period preview"
-    assert app.session_state["date_range"] == (date(2022, 1, 2), date(2022, 1, 8))
+    assert app.pills(key="date_preset").value == "Forecast period preview"
+    assert app.session_state["date_range"] == (date(2022, 1, 2), date(2022, 1, 31))
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_relative_presets_follow_imports_but_custom_dates_require_apply_and_stay_fixed(
+def test_relative_presets_follow_imports_and_custom_dates_apply_immediately_and_stay_fixed(
     imported_data: None, monkeypatch: pytest.MonkeyPatch, page: str
 ) -> None:
     revision, latest = ["first"], [date(2022, 1, 1)]
@@ -811,7 +815,7 @@ def test_relative_presets_follow_imports_but_custom_dates_require_apply_and_stay
 
     monkeypatch.setattr(repository, "load_catalog", catalog)
     app = _page(_app(), page)
-    app.selectbox(key="date_preset").set_value("Latest recorded 7 days").run()
+    app.pills(key="date_preset").set_value("Latest recorded 7 days").run()
     assert not app.exception
     assert app.session_state["date_range"] == (date(2021, 12, 26), date(2022, 1, 1))
     app.run()
@@ -822,26 +826,21 @@ def test_relative_presets_follow_imports_but_custom_dates_require_apply_and_stay
     applied = (date(2022, 1, 2), date(2022, 1, 8))
     assert app.session_state["date_range"] == applied
     custom = (date(2030, 1, 1), date(2030, 1, 31))
-    app.selectbox(key="date_preset").set_value("Custom range").run()
-    app.date_input(key="date_range_draft").set_value(custom).run()
+    assert not any(button.key in {"date_range_apply", "date_range_cancel"} for button in app.button)
+    app.date_input(key="date_start_draft").set_value(custom[0]).run()
     assert not app.exception
     assert app.session_state["date_range"] == applied
-    filters = app.session_state["screen_context"].filters
-    assert (filters.start_date, filters.end_date) == applied
-    app.button(key="date_range_cancel").click().run()
-    assert not app.exception
-    assert app.session_state["date_range"] == applied
-    assert app.selectbox(key="date_preset").value == "Latest recorded 7 days"
-    app.selectbox(key="date_preset").set_value("Custom range").run()
-    app.date_input(key="date_range_draft").set_value(custom)
-    app.button(key="date_range_apply").click().run()
+    assert any("end date must be on or after" in info.value for info in app.info)
+    app.date_input(key="date_end_draft").set_value(custom[1]).run()
     assert not app.exception
     assert app.session_state["date_range"] == custom
+    assert app.pills(key="date_preset").value == "Custom range"
+    assert not any("end date must be on or after" in info.value for info in app.info)
     revision[0], latest[0] = "third", date(2022, 1, 9)
     app.run()
     assert not app.exception
     assert app.session_state["date_range"] == custom
-    assert app.selectbox(key="date_preset").value == "Custom range"
+    assert app.pills(key="date_preset").value == "Custom range"
     filters = app.session_state["screen_context"].filters
     assert (filters.start_date, filters.end_date) == custom
     assert calls == ["first", "second", "third"]

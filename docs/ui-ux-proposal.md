@@ -116,8 +116,8 @@ dates and available recorded dates appear beside the selector:
 | --- | --- |
 | **Recorded activity overview** | Default to the latest 365 recorded days, bounded by source coverage, and explore activity plus weather. |
 | **Seasonal patterns** | Use all recorded dates to inspect recurring activity/weather patterns. |
-| **History → forecast preview** | Select the latest 30 recorded days plus seven uncovered days; retain recorded metrics and inspect supported forecast rates separately. |
-| **Forecast period preview** | Select the seven days after the last recorded date and show supported model rates, with unavailable ZIPs and dates explained. |
+| **History → forecast preview** | Select the latest 30 recorded days plus 30 uncovered days; retain recorded metrics and inspect supported forecast rates separately. |
+| **Forecast period preview** | Select the 30 days after the last recorded date and show supported model rates, with unavailable ZIPs and dates explained. |
 
 Keep **Latest recorded 7 days**, **Latest recorded 30 days**, **Latest recorded 90 days**, and
 **Custom range** as secondary choices. Anchor recorded presets to the selected source's latest
