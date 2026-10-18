@@ -12,6 +12,7 @@ from sitesense import repository
 from sitesense.business_activity import ProjectionResult, load_projection
 from sitesense.comparison_weather_views import render_comparison_weather
 from sitesense.database import ConfigurationError
+from sitesense.location_businesses import recorded_interval, scoped_businesses
 from sitesense.models import Business, Filters
 from sitesense.ui import ScreenContext, render_setup
 
@@ -21,12 +22,7 @@ def prepare(context: ScreenContext) -> tuple[Business, ...]:
     filters = context.filters
     source = filters.source_category or "All source categories"
     scope = (filters.city, filters.state, filters.category, source)
-    businesses = tuple(
-        business
-        for business in context.catalog.businesses
-        if filters.category in business.categories
-        and (filters.source_category is None or filters.source_category in business.categories)
-    )
+    businesses = scoped_businesses(context.catalog, filters)
     eligible = {business.business_id for business in businesses}
     if st.session_state.get("business_compare_scope") != scope:
         st.session_state.pop("business_compare_ids", None)
@@ -140,11 +136,10 @@ def _render_comparison_matrix(
 ) -> None:
     """Compare snapshot profiles and activity over the same covered calendar dates."""
     filters = context.filters
-    start = max(filters.start_date, context.catalog.coverage.start_date)
-    end = min(filters.end_date, context.catalog.coverage.end_date)
-    effective = replace(filters, start_date=start, end_date=end) if start <= end else None
+    covered = recorded_interval(context.catalog, filters)
     summaries: dict[str, analysis.BusinessSummary] = {}
-    if effective is not None:
+    if covered is not None:
+        effective = replace(filters, start_date=covered[0], end_date=covered[1])
         try:
             records = _activity(effective, context.import_revision)
         except (ConfigurationError, repository.DataUnavailableError, psycopg.Error):
@@ -158,7 +153,7 @@ def _render_comparison_matrix(
                 return
             summaries = {
                 row.business.business_id: row
-                for row in analysis.summarize_businesses(businesses, records, start, end)
+                for row in analysis.summarize_businesses(businesses, records, *covered)
             }
     labels = [
         "Recorded check-ins",
@@ -201,8 +196,8 @@ def _render_comparison_matrix(
     st.subheader("Business comparison")
     periods = [f"Selected: {filters.start_date:%d %b %Y} – {filters.end_date:%d %b %Y}"]
     periods.append(
-        f"Recorded: {start:%d %b %Y} – {end:%d %b %Y}"
-        if effective is not None
+        f"Recorded: {covered[0]:%d %b %Y} – {covered[1]:%d %b %Y}"
+        if covered is not None
         else "Recorded activity unavailable for these dates"
     )
     if projection.interval is not None:
@@ -229,11 +224,10 @@ def render_business_comparison() -> None:
         return
     if "business_compare_ids" not in st.session_state:
         filters = context.filters
-        start = max(filters.start_date, context.catalog.coverage.start_date)
-        end = min(filters.end_date, context.catalog.coverage.end_date)
+        covered = recorded_interval(context.catalog, filters)
         defaults = businesses[:2]
-        if start <= end:
-            effective = replace(filters, start_date=start, end_date=end)
+        if covered is not None:
+            effective = replace(filters, start_date=covered[0], end_date=covered[1])
             try:
                 records = _activity(effective, context.import_revision)
             except ConfigurationError:
@@ -252,7 +246,7 @@ def render_business_comparison() -> None:
 
             if not _import_is_unchanged(context.import_revision):
                 return
-            summaries = analysis.summarize_businesses(businesses, records, start, end)
+            summaries = analysis.summarize_businesses(businesses, records, *covered)
             defaults = tuple(row.business for row in summaries[:2])
         st.session_state["business_compare_ids"] = [business.business_id for business in defaults]
     selected = render_comparison_selection(context)
