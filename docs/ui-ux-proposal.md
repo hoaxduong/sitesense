@@ -1,5 +1,5 @@
-# SiteSense UI/UX direction
-
+# SiteSense UI/UX direction (archived)
+> Historical design reference. See the [current business workspace](business-location-workspace.md) for implemented behavior.
 ## Current decision
 
 The [accepted HTML mockup](mockups/sitesense-ui.html) informed the linked workflow in the existing

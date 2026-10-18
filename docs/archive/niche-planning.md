@@ -1,7 +1,7 @@
 # Source category location analysis and future planning
 
 **Archived area-based POC.** The primary application now uses the
-[business location workspace](business-location-workspace.md), including genuine
+[business location workspace](../business-location-workspace.md), including
 individual-business projections. The sections below document the earlier research
 workflow; its area projections are no longer served by the main pages.
 

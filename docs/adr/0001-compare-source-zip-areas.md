@@ -1,3 +1,5 @@
 # Compare source ZIP areas while keeping activity at business and hour grain
 
 The first SiteSense interface compares candidate areas in Philadelphia, Nashville, and Tampa using source city/state/ZIP membership rather than exact properties. Keep recorded activity at business/date/hour grain so date, category, and activity-view filters remain meaningful; deriving the UI directly from the existing city/day forecast panel would lose both area and hour information. Radius counts use nearby listed category businesses around a representative area point, while the area's activity retains ZIP membership; changing this boundary later changes the comparison population and must be explicit.
+
+Superseded by [Compare source-category businesses](0002-compare-source-category-businesses.md). The original area-based decision above is retained for research history.

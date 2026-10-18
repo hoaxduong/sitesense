@@ -1,5 +1,7 @@
 # Data and UI audit — 2026-10-11
 
+> Archived audit of the dated local snapshot below. Counts and UI descriptions are historical; see the [current business workspace](../business-location-workspace.md).
+
 The October 11 snapshot below was checked against the local PostgreSQL database,
 importer metadata, source files, and location forecast POC outputs. Database
 queries were read-only; no import, migration, download, or model training was run
@@ -130,7 +132,7 @@ remain unsupported.
 
 ## Forecast integration update — 2026-10-13
 
-[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb)
+[04 — Full history forecast training](../../notebooks/04_full_history_forecast_training.ipynb)
 trains and exports the model consumed by the new Demand forecast navigation entry.
 The page is independent of database-backed historical screens. It shows training
 instructions if the local bundle is absent or incompatible, and does not train on

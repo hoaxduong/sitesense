@@ -1,45 +1,59 @@
-# SiteSense
+# SiteSense domain glossary
 
-SiteSense compares historical business activity across candidate areas to support further location research.
+SiteSense compares historical activity at individual Yelp-listed businesses to
+support further business and location research.
 
-## Language
+## Current application terms
 
-**Business**:
-A business listed in the Yelp dataset, with a source identity and a snapshot of its location, categories, rating, and operating status.
-_Avoid_: Candidate site, potential store
+**Business**: A Yelp listing with a stable source identity and snapshot location,
+categories, rating, reviews and operating status. It is an existing archived
+listing, not an available property or proposed new store.
 
-**Candidate area**:
-A group of Yelp-listed businesses sharing a source city, state, and ZIP label, considered for comparison. It is not an exact property or a verified postal boundary.
-_Avoid_: Candidate store, exact site, available property
+**Metro area**: The imported Philadelphia/PA, Nashville/TN or Tampa/FL city cohort.
+These groups do not represent complete official metropolitan boundaries or markets.
 
-**Area center**:
-The mean coordinates of valid business points belonging to a candidate area. It is a representative dataset point, not an official ZIP centroid.
-_Avoid_: Postal centroid, ZIP boundary
+**Business category**: A broad parent group. Restaurant matches the source tag
+`Restaurants`; Spa matches `Day Spas`.
 
-**Nearby category businesses**:
-Yelp-listed businesses matching the selected category within a stated distance of an area center, within the imported city cohort. Their count describes dataset coverage rather than the complete competitive market.
-_Avoid_: All competitors, live competition
+**Source category**: An exact source tag within the parent category, such as
+Restaurant → Pizza. All source categories retains the parent cohort. Tags can
+overlap; whole-business check-ins are not divided among them, so category totals
+must not be added together as distinct activity.
 
-**Check-in**:
-A recorded Yelp activity timestamp associated with a business. It does not identify a unique customer or prove a physical visit.
-_Avoid_: Visitor, customer count, footfall
+**Recorded check-ins**: Yelp activity timestamps counted for a stated population
+and period. They do not identify unique customers or prove physical visits.
+Covered dates without check-ins are zero. Failed reads and dates outside imported
+coverage are unavailable, not zero.
 
-**Recorded activity**:
-The number or distribution of recorded check-ins within a stated population and time period. It is an activity proxy whose coverage depends on Yelp usage.
-_Avoid_: Sales, revenue, actual demand
+**Projected check-ins**: Calendar-model estimates for supported individual
+businesses on dates strictly after imported activity coverage. They extrapolate
+archived patterns without future weather, rent or later market conditions. Missing
+support stays unavailable. They do not estimate new-store revenue or success.
 
-**Weather scenario**:
-A hypothetical weather condition used to explore how activity might differ. A scenario is not a prediction of the weather or proof of a causal effect.
-_Avoid_: Weather forecast, proven weather impact
+**Business profile**: Source snapshot fields such as categories, rating, review
+count and status. Selecting historical activity dates does not turn these fields
+into historically aligned profile observations.
 
-**Mock content**:
-Illustrative text or values used to demonstrate a screen when an applicable result is unavailable. It is explicitly identified as illustrative rather than a dataset finding.
-_Avoid_: Measured result, validated recommendation
+**Observed weather**: Accepted station reports with stated dates, units and
+coverage. Chart temperature uses representative city-airport hourly observations
+when available, with a labeled daily ACIS fallback. Rain uses daily ACIS totals.
+Shared charts pool each mapped station/date once; their weekly or monthly activity
+lines use counts for the same calendar periods. Station context is not a local
+measurement at every business or evidence of a causal weather effect.
 
-**Illustrative score**:
-A weighted comparison of example factor values used to demonstrate ranking behavior. It is not a measured business-success probability or a validated recommendation.
-_Avoid_: Success score, probability of success
+## Retained research terms
 
-**Spatial weather mapping coverage**:
-The share of selected businesses associated with an imported weather point. It does not establish that every activity date has a valid weather observation.
-_Avoid_: Weather-day match rate, complete weather coverage
+These terms occur in older notebooks and the [research archive](docs/archive/README.md).
+They do not define the current business activity ranking.
+
+**Candidate area**: Businesses grouped by source city, state and ZIP label. This
+is neither an exact property nor a verified postal boundary.
+
+**Area center**: The mean of valid business coordinates in a candidate area,
+not an official ZIP centroid.
+
+**Spatial weather mapping coverage**: The share of selected businesses linked to
+an imported weather point. It does not establish valid observations on every date.
+
+**Weather scenario**: Hypothetical weather supplied to an area-model experiment.
+It is neither a weather forecast nor proof of a causal effect.

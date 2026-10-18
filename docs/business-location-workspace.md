@@ -1,148 +1,117 @@
 # Business location workspace
 
-Business is the primary displayed unit on all three exploration pages. The shared
-inputs are Metro area → Business category → Source category → Date range.
-Exact Source category tags restrict peer membership. A business can carry several
-tags; its check-ins belong to the whole listing and are never divided among tags.
+Use the sidebar inputs **Metro area → Business category → Source category → Date
+range** across the three exploration pages. Businesses are the displayed unit.
+The metro choices use imported Philadelphia/PA, Nashville/TN and Tampa/FL city
+cohorts, rather than official metropolitan boundaries.
+
+Source categories are exact archive tags. For example, Restaurant → Pizza
+requires both `Restaurants` and `Pizza`. **All source categories** keeps the
+whole parent category. Tags can overlap: a listing's check-ins belong to the
+whole business and are never divided among its tags.
 
 ## Location map
 
-Every point represents one business at its own source latitude/longitude.
-The map defaults to the top 20 businesses with coordinates under the selected
-ranking; a control allows 10, 20, 50 or 100. The table and download retain the
-full selected niche. Weather backgrounds continue to cover that full niche.
-Circle size represents the available recorded and projected counts for the same
-selected interval, with a minimum size for zero or unavailable activity.
-Use the ranking table's row checkboxes to choose up to four businesses, then open
-Compare businesses from the table toolbar. Each checked business adds an activity
-line to the shared weather chart. Checks follow stable business IDs across ranking,
-date and search changes, including duplicate names. Search-hidden picks remain
-selected. Map circles retain their hover summary and selection highlight.
-The comparison chart supports one to four selected businesses.
+The map combines individual business activity circles with an optional observed
+weather background. It defaults to the top **20** businesses with coordinates;
+choose **10, 20, 50 or 100**. Circle size represents activity over the selected
+dates. Zero or unavailable activity retains a minimum-size circle.
 
-The map's weather/activity timeline totals recorded check-ins across every
-business matching the shared filters, including businesses without coordinates.
-Its scope does not change with the map's top-N limit, name search, selected point
-or comparison picks. Weather samples are not duplicated for each business.
-Recorded and projected totals keep separate dates; a projected scope total covers
-only the explicitly counted supported businesses, while unsupported ones remain
-unavailable.
+The ranking table, CSV and weather background retain the full selected niche,
+including businesses without coordinates. Name search and the table's display
+limit narrow the visible rows. Use row checkboxes to select up to **four**
+businesses, then the highlighted **Compare businesses** button to open their
+comparison. Selections use stable
+business IDs, so duplicate names and search-hidden picks remain distinct.
 
-Rankings use Recorded check-ins within coverage. When the range extends past
-coverage, supported businesses rank by the sum of their separately labeled
-recorded and projected counts. Businesses without
-coordinates remain in the table and exports. Businesses with no recorded activity
-remain zero only inside imported coverage; failed reads and uncovered dates are
-unavailable. Unsupported projected portions remain unavailable and unranked.
-No area-level
-minimum-business threshold limits which listings appear.
+Hover a circle for its recorded/projected counts, separate activity dates and
+station-weather summary. Selecting a circle highlights it; individual comparison
+belongs on **Compare businesses**.
 
-The map combines an optional weather background with individual activity circles.
-Choose mean daily high/low temperature or precipitation from valid reports for
-the selected dates. Background colors represent the selected businesses' mapped
-ACIS station observations, averaged within the packaged area boundaries; they
-are representative weather, not a continuous interpolated surface. The boundary
-geometry only supplies weather context. Business locations, activity, rankings
-and selection remain individual listings.
+**Weather and recorded activity** below the map totals every business matching
+the shared filters, including listings without coordinates. Map limits, name
+search, selected circles and comparison picks do not change this chart.
 
-Circle size and business colors retain their activity meaning above the weather
-background. Hover cards stay inside the map and show the business name, Recorded
-check-ins, activity dates and a compact station-weather summary. Mixed intervals
-also show Projected check-ins and their separate dates. Business IDs
-remain available in the details and downloads. Different weather dates and
-valid-day coverage stay explicit. Missing weather or boundary geometry does not
-remove business circles.
-Zero rainfall is a valid observation. Rainfall totals are averaged across mapped
-businesses rather than added together, and partial report coverage is explicit.
-Weather queries use the requested dates independently of Yelp activity coverage.
+The weather background offers mean daily high, mean daily low or precipitation
+from accepted ACIS reports for the requested dates. Packaged area boundaries
+provide representative mapped-station weather context; activity remains at each
+business's coordinates. Rainfall totals are averaged across mapped businesses,
+never added across them. Valid-day coverage stays explicit, and missing weather
+or boundary geometry does not remove business circles. The retained
+[boundary preparation instructions](archive/zip-weather-map.md#boundaries) apply
+to this weather layer.
 
 ## Compare businesses
 
-Select up to four businesses. Shared metro, parent and source selection define
-eligible peers; changing scope clears stale IDs. Date changes preserve valid
-choices. One **Weather and recorded activity** chart shows a distinct activity
-line for each selected business and shared weather boxes on the right axis.
-Two businesses produce two activity lines. A compact comparison matrix below
-the chart shows recorded totals, days with check-ins, weekend share, snapshot
-rating, review count, operating status and source categories for the selected
-businesses. The shared chart supplies the activity trends. There is no separate
-activity timeline or individual-details panel.
+Choose **one to four** businesses from map table checkboxes or the comparison
+page's search and selector. Changing metro, parent category or source category
+clears incompatible choices; changing dates preserves valid business IDs.
 
-Recorded check-ins use matching calendar weeks or months, including covered zero
-days and partial periods. Each business has a stable color; supported projections
-continue in that color with a dashed line only after imported coverage ends.
-Uncovered or failed activity reads remain unknown. Weather samples are shared
-across the comparison, rather than duplicated for each business.
-The matrix distinguishes covered recorded dates from the requested range.
-Snapshot profile fields describe the archive, regardless of the activity dates;
-failed or uncovered activity remains unavailable while profile fields stay visible.
+One **Weather and recorded activity** chart shows a distinct line for each
+business against shared weather boxplots. Recorded counts are solid; supported
+projections continue in the same business color with dashed lines. There is no
+separate activity timeline or individual-details panel.
 
-## Automatic projected activity
+The **Business comparison** matrix places recorded check-ins, days with
+check-ins, weekend share, snapshot rating, reviews, operating status and source
+categories side by side. Projected check-ins appear when applicable. The caption
+distinguishes selected, recorded and projected dates. Profile fields describe the
+archive snapshot even when activity is unavailable for the selected dates.
 
-Location map and Compare businesses use the sidebar Date range for both recorded
-and projected activity. There is one view, with no planning mode or second date
-selector. Recorded dates are the intersection with imported coverage. Predictions
-apply only to selected days strictly after the final covered date. Covered days
-with no check-ins stay recorded zeros; failed recorded reads and dates before
-coverage are never filled by the model.
+## Business analysis
 
-The same map, rankings and downloads retain individual business IDs and separate
-Recorded check-ins from Projected check-ins. The weather/activity timeline uses
-solid recorded counts and a dashed projected tail in matching calendar weeks or
-months. Partial periods retain separate exposure for each evidence type. The
-comparison page restricts projections to its chosen IDs. Unsupported individuals
-remain unavailable rather than receiving a group prediction or zero estimate.
+Use **Business analysis** to discover leading source categories, rank competitors
+in an exact niche and investigate one business's daily weather associations.
+This page uses recorded dates only. See [Business analyzer](business-analysis.md)
+for its rankings, comparison controls and correlation limits.
 
-Weather layers show only imported observations for the requested dates. Future
-days without weather reports retain projected activity with missing weather;
-historical weather is not substituted. Correlations and weather-band summaries
-continue to use recorded activity only.
+## Dates, charts and projections
 
-Run model preparation explicitly outside Streamlit:
+Recorded activity covers the intersection of the requested dates and imported
+coverage. Covered days without check-ins are **zero**. Failed reads, dates before
+coverage and unsupported projections remain **unavailable**.
+
+Location map and Compare businesses automatically project selected dates strictly
+after imported activity coverage ends. They use the same sidebar dates, map and
+charts; there is no separate planning mode. Rankings use recorded totals within
+coverage, then recorded plus supported projected totals for mixed ranges.
+Unsupported projected portions remain unavailable and unranked. Scope projection
+totals identify how many businesses are modeled and omit unsupported businesses.
+
+Activity lines and weather boxes share Monday-based calendar weeks for ranges
+of up to 90 days, and calendar months for longer ranges. Activity is totaled over
+selected covered dates, including partial periods. Weather uses accepted
+observations independently of activity coverage; future dates without reports
+have no weather boxes. Temperature uses representative airport hourly reports
+when available; otherwise charts use mapped daily ACIS summaries. Precipitation
+uses daily ACIS totals. Shared charts count each mapped station once per date,
+not once per business. See [Observed hourly weather](hourly-weather.md).
+
+Prepare individual-business projections explicitly outside Streamlit:
 
 ```sh
 uv run --frozen --env-file .env python scripts/train_business_forecast.py
 ```
 
-The read-only training process writes ignored JSON artifacts under
-`models/business_forecast/`. A target is `(business_id, parent category, day)`.
-Source tags filter membership without partitioning activity. Businesses with
-several tags have the same individual rate under each matching tag.
-
-Every fit selects businesses with first recorded activity at or before its
-window's start and at least 20 training check-ins. Selection never uses future
-last-activity dates, snapshot ratings, reviews or operating status as historical
-features. Full calendar exposure retains zero-activity days.
-
-- Fit 2017–2019 and select overall mean versus a month/weekday model on 2020.
-- Independently rebuild eligibility and fit 2018–2020 for assessment in 2021.
-- Independently rebuild eligibility and fit the final model on 2019–2021.
-
-Month/weekday rates shrink toward a deduplicated city/parent prior with 30 prior
-days. Selection uses equal business-day mean Poisson deviance. Backtests retain
-both models' errors and top-business agreement within exact-source populations.
-These previously inspected years remain exploratory.
-
-The completed local run selected `overall_mean`: 2020 deviance 0.320927 versus
-0.334326 for the seasonal alternative; 2021 assessment 0.292079 versus 0.310625.
-The final artifact contains 2,841 business/parent targets representing 2,839 unique
-businesses. The same individual daily mean applies across future dates; period
-totals scale by calendar days. Unsupported individuals are not assigned a group
-prediction. The loader checks source/code/lockfile/import/payload hashes and model
-schema, support, windows and metrics.
+The read-only training process writes ignored artifacts under
+`models/business_forecast/`. It compares an overall mean with a shrunk
+month/weekday model using forward validation, then fits the selected model on
+2019–2021. Each fit requires first recorded activity by its training start and at
+least 20 training check-ins, retaining zero-activity calendar days. Source tags
+filter membership without changing an individual's prediction. The loader checks
+source, code, lockfile, import and payload provenance together with the expected
+schema, support rules, training windows and validation metrics. Changed or missing
+artifacts make projections unavailable; the app never trains during rendering.
 
 ## Interpretation
 
-Check-ins are recorded activity, not customers, revenue or business success.
-Business names, category memberships and coordinates describe the archive
-snapshot. Data ends in 2022. Future calendar projections extrapolate archived
-individual patterns and do not account for later market changes, closures, rent
-or future weather. They support competitor and location research; they do not
-validate an opening decision or predict a new shop's performance.
+Check-ins measure recorded Yelp activity, not customers, revenue, market share or
+business success. Ratings, reviews, status, tags and coordinates describe an archive
+snapshot. Historical opening dates are unavailable, and zero activity does not
+establish whether a business was open. Weather associations do not establish
+causation; activity and weather timestamps are not verified as aligned.
 
-The earlier area-based map, cohort-normalized scientific views and niche-area
-models remain as research components; they are not served by the primary pages.
-Individual daily associations use the chosen business's mapped station. The
-scope timeline uses the representative metro hourly temperature series when
-available and distinct mapped daily station reports otherwise, preserving their
-source/timestamp/missing-value policies.
+Projections extrapolate archived individual patterns. They do not incorporate
+later market changes, closures, rent or forecast weather, and do not predict a
+new shop's performance. Earlier area-based models and interfaces are documented
+in the [research archive](archive/README.md).

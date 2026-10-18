@@ -1,108 +1,75 @@
 # Business analyzer
 
-Open **Business analysis**. The sidebar inputs follow **Metro area → Business
-category → Source category → Date range**. Source categories are exact labels
-already stored for the businesses in the selected broad category and city.
-For example, Restaurant → Pizza requires both `Restaurants` and `Pizza`.
-**All source categories** allows an initial overview before choosing an industry.
+Open **Business analysis** and choose **Metro area → Business category → Source
+category → Date range**. This page uses the intersection of selected dates and
+imported check-in coverage. A range outside that history has no recorded analysis.
+For shared filters, date rules and projections on the other pages, see
+[Business location workspace](business-location-workspace.md).
 
-The supported metro controls use the imported Philadelphia/PA, Nashville/TN and
-Tampa/FL canonical city cohorts, rather than official metro boundaries. All
-comparisons use the intersection of the requested dates and imported check-in
-coverage. Dates outside that history remain unavailable.
+## Discover source categories
 
-## Which source categories lead within the broad category?
+**Top source categories** ranks every additional source tag within the selected
+parent category and city by **Recorded check-ins**. The selected sidebar source
+category does not hide alternatives from this discovery ranking.
 
-**Top source categories** ranks every additional source label within the selected
-broad category, city and effective period. Choosing a source category in the
-sidebar does not remove the other groups from this discovery ranking.
+Read totals alongside listed businesses, businesses with check-ins and the
+largest business's share. **Minimum businesses** defaults to one; raising it
+excludes smaller groups without establishing statistical significance.
+**Categories shown** limits the display to 10, 20 or 50 groups. The CSV retains
+the complete eligible ranking and its geographic, date and minimum-business scope.
 
-The ranking uses **Recorded check-ins** in the effective period. Read the counts
-alongside group size, the number of businesses with check-ins and the largest
-business's share of activity.
-Use **Minimum businesses per source category** to inspect rankings beyond very
-small groups. Its default of one keeps every source category available; increasing
-it is a visible comparison filter, not a statistical significance test.
+Tags overlap, so group counts and activity are not additive. All matching snapshot
+listings, including zero-activity businesses, remain in the group count. Notes for
+fewer than five businesses or twenty check-ins flag small samples; they do not
+establish statistical reliability.
 
-Source categories overlap. One listing may appear in several groups, so group
-counts and check-ins must not be added together. All matching snapshot listings,
-including zero-activity listings, remain in the denominator. Groups with fewer
-than five listings or twenty check-ins receive a data note; these thresholds do
-not establish statistical reliability. The selected top-N view is a display
-limit; the CSV exports the complete eligible ranking with its geographic/date
-scope and minimum-business filter.
+## Research competitors
 
-## Who are the leading businesses and competitors?
+**Top businesses and competitors** ranks businesses in the selected exact source
+category by recorded check-ins. Name search narrows the displayed list without
+changing the industry benchmark. Stable business IDs distinguish duplicate names;
+zero-activity listings remain available and ties use stable ordering.
 
-**Top businesses and competitors** uses the selected exact source category,
-with optional name search. Rank by Recorded check-ins in the effective
-period. Stable source IDs distinguish repeated names. Zero-activity businesses
-remain available. Ordinal positions use stable tie ordering.
+Choose up to four businesses in this page's selector to compare their recorded
+totals, days with check-ins, weekend share and snapshot profile fields. A monthly
+timeline uses selected covered dates, including partial months and recorded zeros.
+These analysis-page choices are separate from the map's comparison selection.
 
-Research each business using its Recorded check-ins, dates with
-check-ins, weekend activity share, full source labels, snapshot rating,
-review count and operating status. Search narrows the visible list without
-changing its industry benchmark. Choose up to four businesses for a shared
-weather/activity chart. Each line totals Recorded check-ins over the same
-calendar weeks or months, retaining partial periods and covered zero-activity days.
+For a shared weather chart with one activity line per business, check rows on
+**Location map** and open **Compare businesses**. That page combines the weather
+and activity chart with a side-by-side profile/activity matrix.
 
-On Location map, check rows in the ranking table and use its toolbar action to
-open Compare businesses. Its single weather/activity chart displays one activity
-line per selected business, up to four, with shared weather boxplots. The map's
-weather/activity timeline always totals the full filtered
-business scope. City, broad-category and source-category changes reset
-incompatible selections; ordinary date changes retain valid business IDs.
-The comparison matrix also places snapshot profile fields, recorded totals,
-days with check-ins and weekend share side by side for those same businesses.
+## Investigate one business's weather associations
 
-## How does weather correlate with one business's activity?
+Use **Business to investigate** to display one business's **Weather and recorded
+activity** chart. Activity totals and weather boxes share calendar weeks for up to
+90 selected days, then calendar months. Tooltips retain selected period boundaries
+and covered calendar-day counts. Activity remains visible for periods without
+weather reports.
 
-The activity/weather chart totals Recorded check-ins over the same calendar periods
-as its weather boxes: Monday-based calendar weeks for selected ranges of up to
-90 calendar days, and calendar months for longer ranges. The activity line and weather boxes use
-the same period midpoint. Tooltips identify the week or month, covered start/end
-dates and calendar-day count; partial periods include only the selected dates
-inside imported activity coverage. Zero-activity periods remain visible, including
-periods with no weather reports. Weather boxplots use the right axis. When available,
-boxes use routine hourly observations from the city's representative airport,
-shared across ZIP and business views. Temperature uses one distribution of measured
-temperatures. Precipitation uses accepted daily station totals in mm/day, including dry days. Boxes span Q1–Q3, with a
-median line, min/max whiskers and mean diamond. Tooltips identify the
-station, source, frequency, sample count and hourly coverage. Missing reports are
-excluded; dry hours remain zero. A dry period can have a zero-height rainfall box.
+Temperature boxes use the city's representative airport hourly measurements when
+available, with mapped daily ACIS lows/highs as the fallback. Rainfall boxes use
+accepted daily ACIS totals in mm/day, including dry days. Hourly and daily samples
+are never pooled into one box. Boxes show Q1–Q3, median, minimum/maximum whiskers
+and mean. A dry period can have a flat rainfall box. See
+[Observed hourly weather](hourly-weather.md) for source and timestamp policies.
 
-When hourly data is unavailable, the chart labels its daily ACIS fallback. Daily
-summary temperature combines available lows/highs; its mean describes those
-summaries rather than hourly measured temperature. Hourly and daily samples are
-never pooled into one box. See [hourly weather](hourly-weather.md).
+Expand **Analysis details** for daily paired-day counts, missing weather, and
+unadjusted Pearson correlation. These associations always use the business's
+mapped daily ACIS station, independently of the chart's hourly temperature source.
+High and low temperature correlations remain separate. The observations table
+preserves missing weather; weather-band summaries include paired-day counts and
+activity quartiles.
 
-Daily paired-day counts, correlations, bands and the observations table continue
-to use the selected business's mapped ACIS station. High and low temperature
-correlations remain separate from each other and from the hourly display source.
+Only covered activity is zero-filled. Missing or rejected weather is excluded
+from daily pairs; valid zero rainfall and trace rainfall represented as zero are
+included. Pearson correlation requires at least three paired days and variation
+in both measures. Fewer than thirty paired days receives a sample warning.
+Unmapped businesses and absent reports show an unavailable state.
 
-The dated observations table retains missing weather. The weather-band summary
-remains available as a table with paired-day counts and activity quartiles.
-Pearson correlation uses raw daily pairs rather than period or band summaries.
-
-Activity is zero-filled only inside imported coverage; missing or rejected weather
-stays missing and is excluded from paired days. Valid zero precipitation and trace
-rainfall represented as zero remain included. The page reports total calendar
-days, paired days, missing weather days and unadjusted Pearson correlation.
-Correlation is unavailable with fewer than three paired days or a constant
-variable; fewer than thirty paired days receives a sample warning. Unmapped
-businesses and absent station observations show an unavailable state.
-
-The correlation does not control for weekdays, seasonality or other confounders,
-and does not establish causation or statistical significance. Source check-in
-dates use assumed-local labels; alignment with station report dates is unverified.
-
-Check-ins describe recorded Yelp activity, not customers, revenue, market share
-or business success. Ratings, reviews, category tags and operating status describe
-the archive snapshot. Historical opening dates are unavailable; zero check-ins
-do not establish whether a business was open or closed. Activity belongs to the
-whole listing, so a hotel's check-ins cannot be attributed specifically to its
-spa. Smaller source-category views do not extend the broad-sector forecast model.
-All primary pages now use [individual businesses](business-location-workspace.md).
-Location map and Compare businesses share the exact Source category filter and
-show individual recorded activity or independently trained business projections.
-The business analysis page no longer groups or filters its peer list by ZIP.
+The correlations do not control for weekdays, seasonality or other confounders,
+and do not establish causation or statistical significance. Activity dates use
+assumed source-local labels; alignment with station report dates is unverified.
+Check-ins belong to the whole listing, so a hotel's activity cannot be attributed
+specifically to its spa. Profile fields remain archive snapshots, regardless of
+the activity dates.

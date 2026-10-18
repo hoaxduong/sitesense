@@ -1,25 +1,35 @@
 # Observed hourly weather
 
-Prepare hourly weather explicitly before using the observed activity/weather charts:
+The activity/weather charts use **NOAA hourly temperature** when available.
+Otherwise temperature boxes use mapped daily ACIS lows/highs. **Precipitation
+boxes always use accepted daily ACIS totals (mm/day)**, including dry days.
+Stored hourly rainfall is source data and is not summed into chart daily totals.
+
+Location map uses one weather distribution for its whole filtered business scope.
+Compare businesses shares one weather distribution across its selected activity
+lines. Daily weather samples are pooled from distinct mapped stations: each
+station/date contributes once, regardless of how many businesses share it. The
+single-business investigation uses that business's mapped daily station. All
+charts keep hourly measurements and daily fallback summaries separate.
+
+These are observed station reports, not measurements at each business or weather
+forecasts. Daily correlations and the retained area-level weather models use ACIS
+sources. The current business projection model uses calendar patterns without weather.
+
+## Prepare the optional hourly import
+
+Run acquisition and import explicitly outside Streamlit:
 
 ```sh
 uv run --frozen --env-file .env python -m sitesense.database migrate
 uv run --frozen --env-file .env python scripts/prepare_hourly_weather.py
 ```
 
-The default scope is 2009-01-01 through 2026-10-09 for Philadelphia, Nashville and Tampa.
-Use `--city Philadelphia`, `--start-date YYYY-MM-DD` and `--end-date YYYY-MM-DD` to
-prepare a smaller scope. `--download-only` prepares and validates the files without
-connecting to PostgreSQL. Acquisition runs outside Streamlit with three concurrent
-station-year downloads; completed files are reused after SHA-256 verification.
-
-Original NOAA LCDv2 station-year CSVs are retained as gzip files in
-`data/raw/hourly_weather/raw/`, with a download manifest for each file.
-The completed `data/raw/hourly_weather/manifest.json` identifies the source hashes,
-selected dates, station metadata, units, missing counts and normalized observation
-file. The normalized filename contains its content hash, and the manifest is
-published atomically after every file has been verified. Corrupt caches fail
-validation; `--refresh` explicitly replaces raw downloads.
+The script defaults to **2009-01-01 through 2026-10-09** for Philadelphia,
+Nashville and Tampa. Use `--city Philadelphia`, `--start-date YYYY-MM-DD` and
+`--end-date YYYY-MM-DD` for a smaller scope. `--download-only` validates local
+files without connecting to PostgreSQL. Verified completed files are reused;
+`--refresh` explicitly replaces raw downloads.
 
 | City | Airport station | Local standard offset |
 | --- | --- | --- |
@@ -29,41 +39,43 @@ validation; `--refresh` explicitly replaces raw downloads.
 
 The source is [NOAA NCEI Local Climatological Data v2](https://www.ncei.noaa.gov/oa/local-climatological-data/v2/).
 Its [documentation](https://www.ncei.noaa.gov/oa/local-climatological-data/v2/doc/lcdv2_DOCUMENTATION.pdf)
-defines Celsius temperature, millimeter precipitation, missing values and quality
-flags. The parser uses only routine `FM-15` hourly reports. It retains the latest
-report in each station/local-standard hour; conflicting reports at the same
-timestamp use a deterministic raw-row tie break. Special `FM-16` reports are
-excluded to avoid counting overlapping precipitation intervals.
+defines the units, missing values and quality flags.
 
-`HourlyDryBulbTemperature` and `HourlyPrecipitation` are already decimal Celsius
-and millimeters. They are not divided by ten. Blank, nonnumeric, suspect (`s`)
-and erroneous (`*`) readings remain missing. Zero precipitation is retained.
-Trace precipitation (`T`) is stored as zero with `is_trace=true`; its original
-text is preserved. Missing hours are never fabricated.
+## Samples and timestamps
 
-`DATE` is station local standard time throughout the year. The database preserves
-the report timestamp without a timezone and stores the fixed UTC offset alongside
-it. For example, a summer Philadelphia report at `13:54` local standard time is
-`18:54Z`, which is `14:54` on the city's daylight-saving clock. Convert through
-UTC before aligning observations with civil-time activity periods.
+The parser accepts routine `FM-15` reports and retains the latest report in each
+station/local-standard hour, using a deterministic tie break for conflicting
+reports at the same timestamp. Special `FM-16` reports are excluded to avoid
+overlapping precipitation intervals.
 
-The migration adds `sitesense.hourly_weather_observations`, with a unique index
-that enforces one observation per station and local-standard hour. Imports replace
-only selected station/date ranges in one transaction and preserve observations
-outside that scope. Registry key `basic_app_hourly_weather_v1` has its own import
-revision. Daily ACIS observations, business mappings, model inputs and their
-revision remain unchanged.
+`HourlyDryBulbTemperature` and `HourlyPrecipitation` are decimal Celsius and
+millimeters, without a factor-of-ten conversion. Blank, nonnumeric, suspect (`s`)
+and erroneous (`*`) readings remain missing. Zero precipitation is valid; trace
+(`T`) is stored as zero with `is_trace=true` and the original text. Missing hours
+are never fabricated.
 
-Dataset metadata retains every distinct completed import manifest and its source
-path in `import_history`. Reimporting the same exact snapshot is deduplicated.
-Partial refreshes preserve earlier manifests and hashes so observations retained
-outside the refreshed scope keep their source lineage.
+`DATE` uses station local standard time throughout the year, without daylight
+saving. The database stores the original timestamp and fixed UTC offset; chart
+rows retain that offset. For example, summer Philadelphia `13:54` local standard
+time is `18:54Z`, or `14:54` on the city's daylight-saving clock. Activity dates
+retain assumed source-local labels. Their alignment with weather dates has not
+been verified; civil-time analysis would require conversion through UTC.
 
-These are observed airport station reports. They provide city-level weather
-context, not measurements at each ZIP area or operational weather forecasts.
+## Provenance and refreshes
 
-Temperature charts use these hourly measurements. Precipitation boxplots use
-accepted ACIS daily totals (mm/day), including dry days, because hourly rainfall
-is mostly zero. Missing or rejected daily reports remain excluded. The stored
-hourly precipitation remains available as source data; it is not summed into
-calendar-day totals in the chart.
+Raw station-year CSVs are retained as gzip files under
+`data/raw/hourly_weather/raw/`, with per-file download manifests.
+`data/raw/hourly_weather/manifest.json` records source SHA-256 hashes, dates,
+stations, units, missing counts and the content-addressed normalized file. The
+manifest is published only after file verification; corrupt caches fail validation.
+
+Imports replace only the selected station/date ranges in one transaction. A unique
+index allows one observation per station/local-standard hour. Dataset key
+`basic_app_hourly_weather_v1` has its own revision, separate from daily ACIS data,
+business mappings and activity/model inputs. Distinct completed manifests and
+their paths remain in `import_history`; exact reimports are deduplicated and
+partial refreshes preserve lineage for observations outside the refreshed range.
+
+An unavailable hourly import does not block the app's daily weather fallback.
+Missing or rejected daily reports stay excluded; a mostly dry period can still
+have a zero-height rainfall box.

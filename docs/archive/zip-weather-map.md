@@ -1,8 +1,8 @@
 # ZIP weather map
 
 **Archived workspace.** The primary application now displays
-[individual businesses](business-location-workspace.md). This document describes
-the retained area-level research components, not the current main-page workflow.
+[individual businesses](../business-location-workspace.md). This document describes
+the retained area-level research components. The [Boundaries](#boundaries) preparation remains relevant to the current weather background; the activity workflow below is historical.
 
 Location map fills eligible ZIP areas with representative observations for
 the screen's selected city, category, and recorded dates. Users choose mean daily maximum
@@ -125,10 +125,10 @@ they are not USPS delivery-route boundaries. The asset uses WGS84 coordinates,
 six decimal places, and Census API generalization of 0.00005 degrees.
 
 The 2026-10-11 preparation requested all 210 imported source-city ZIP labels and
-returned 164 polygons. Four currently eligible Restaurant ZIPs have no matching
+returned 164 polygons. Four then-eligible Restaurant ZIPs have no matching
 ZCTA: Philadelphia 19176/19195, Nashville 37246, and Tampa 33601. Their business
 and station data remain available in the existing detail views; the map reports
-missing boundary coverage and does not invent polygons. All eligible Spa ZIPs have
+missing boundary coverage and does not invent polygons. All then-eligible Spa ZIPs had
 boundaries.
 
 The asset records the query source, boundary vintage, preparation time, requested

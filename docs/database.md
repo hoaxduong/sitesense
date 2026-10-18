@@ -1,36 +1,14 @@
 # PostgreSQL
 
-PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The basic app stores source ZIP areas, business snapshots, hourly check-in counts, ACIS station observations and spatial mappings, alongside dataset provenance and import coverage.
+PostgreSQL is the application's primary database. Reusable connection and migration code lives in `src/sitesense/database.py`; both application modules and notebooks can use it. Raw archives, staged files, and bulk research artifacts remain local files (or future object storage). The app stores business snapshots, sparse hourly check-in counts, ACIS station observations and spatial mappings, alongside dataset provenance and import coverage. Source ZIP records remain in the schema for retained research; current pages analyze individual businesses and exact source categories.
 
 ## Local environment
 
-For a fresh checkout, copy `.env.example` to `.env` and replace the example password in both entries. Keep this ignored file dedicated to local development. Run commands from the repository root.
+Follow [Local development](agents/local-development.md) for dependency setup, source notebooks, local `.env`, database startup and Streamlit. Both source notebooks must complete before the first import. The [dataset guide](../data/README.md) lists staged files and headless notebook commands.
 
-Prepare the source files before importing data:
+Compose exposes PostgreSQL on `127.0.0.1` and stores data in the `sitesense_postgres_data` named volume. Use `docker compose ps` to inspect it and `docker compose down` to stop it while retaining data. SQL clients use the configured `POSTGRES_PORT` and credentials from local `.env`; keep connection URLs out of screenshots and app content.
 
-```sh
-uv sync --frozen --group notebooks
-uv run --frozen --group notebooks jupyter lab --notebook-dir=.
-```
-
-In JupyterLab, select **Python 3 (ipykernel)** from this project's environment; in VS Code, select `.venv/bin/python`. Run [01 — Yelp](../notebooks/01_yelp_dataset_exploration.ipynb), then [02 — Climate](../notebooks/02_climate_dataset_exploration.ipynb), using **Restart Kernel and Run All** for each. **Both must finish without errors before the first `sitesense.import_data` run.** The notebooks download or verify the archives and stage the importer inputs without needing PostgreSQL. See [the dataset guide](../data/README.md) for headless execution and file paths.
-
-After both notebooks finish, start PostgreSQL, apply migrations, import data, and start Streamlit:
-
-```sh
-docker compose up --detach --wait db
-uv run --frozen --env-file .env python -m sitesense.database migrate
-uv run --frozen --env-file .env python -m sitesense.import_data
-uv run --frozen --env-file .env streamlit run app.py
-```
-
-Compose exposes PostgreSQL only on `127.0.0.1`, and stores its data in the `sitesense_postgres_data` named volume. PostgreSQL 18 uses the `/var/lib/postgresql` volume mount. The app runs on the host for Streamlit's normal hot reload.
-
-Use `docker compose ps` for service state and `docker compose down` to stop the database without removing its volume. When editing credentials or ports, update `DATABASE_URL` to match the `POSTGRES_*` values. Changing `POSTGRES_PASSWORD`, `POSTGRES_USER`, or `POSTGRES_DB` does not alter an already initialized database volume.
-
-Substitute `docker-compose` if Compose is installed as a standalone command. To connect with an SQL client, use host `127.0.0.1`, the configured `POSTGRES_PORT`, and the database/user/password from your local `.env`. Do not paste the connection URL into screenshots or app content.
-
-Existing shell variables override `.env` values in both Compose and `uv`. Check or unset inherited database variables before local commands if your shell also contains credentials for another environment.
+Keep `DATABASE_URL` consistent with `POSTGRES_*`. Changing those values does not change credentials in an initialized volume. Existing shell variables override `.env` values in Compose and `uv`; check inherited database settings before running local commands.
 
 ## Application connections
 
@@ -50,9 +28,9 @@ Use parameter binding for values. Each connection context commits on success, ro
 
 The registry tracks dataset provenance. The importer separately creates business/activity records and stores its completed coverage and timestamp assumption in registry metadata. This does not certify dataset quality or establish a validated scoring or forecasting model.
 
-## Basic app import
+## Source import
 
-Before the first import, complete both notebooks in the order described in [Local environment](#local-environment). The explicit `sitesense.import_data` command reads their staged Yelp business/check-in files and completed Climate Explorer station snapshot. It imports Philadelphia, Nashville, and Tampa, keeping exact category labels and source ZIP strings. ACIS station observations are the app's weather source. Use `--climate-root` for another snapshot directory or `--without-weather` for an activity-only import. Raw files are not downloaded by the app or importer.
+The explicit `sitesense.import_data` command reads staged Yelp business/check-in files and the completed Climate Explorer station snapshot. It imports exact canonical city/state cohorts for Philadelphia, Nashville and Tampa, preserving source tags and ZIP strings. The UI labels this cohort filter “Metro area”; it is not an official metro boundary. Restaurant and Spa correspond to exact `Restaurants` and `Day Spas` tags; source categories are other exact tags within that parent and may overlap. Use `--climate-root` for another snapshot directory or `--without-weather` for an activity-only import. The app and importer do not download archives or train models.
 
 For a weather-only refresh, complete notebook 02 with the intended snapshot first. Then seed station weather for businesses already imported, without reimporting activity:
 
@@ -70,15 +48,13 @@ caches; model provenance remains tied to the original daily source. See
 
 The weather seed verifies completed source manifests and checksums, imports observations once per station/report date/variable, and updates business-to-station links in one transaction. Reruns replace that seed instead of adding observations. The existing `weather_cells` table stores spatial points for both legacy ERA5 grids and ACIS stations; `source_kind` distinguishes them. `station_weather_observations` stores normalized native Fahrenheit/inch values together with raw values, trace markers, primary/source flags, network IDs and local standard observation times. Missing values remain null.
 
-The Weather impact screen displays real station summaries in Celsius and millimeters, including accepted-day coverage. Accumulated and other flagged daily values are excluded, and trace precipitation is approximately zero with its marker retained. Station report dates have provider observation windows; these summaries do not establish an aligned activity/weather relationship. County annual/monthly climate projections remain separate local exploration inputs.
-
-The local ERA5 dataset files, unused grid points and old spatial-mapping registry entry were removed after the switch to ACIS. The app importer no longer accepts ERA5 CSV mappings.
+Map weather layers and daily weather/activity analysis use ACIS observations, converted to Celsius and millimeters. Accumulated and other unsuitable flags are excluded; trace precipitation is approximately zero with its marker retained. Optional NOAA hourly observations supply richer boxplot samples without replacing ACIS daily inputs. Weather and activity share calendar bins in the charts, but station report windows and unverified check-in timezone labels limit the interpretation of their alignment. County climate scenarios remain separate research inputs.
 
 The default declared check-in import interval is 2009-12-30 through 2022-01-19. A completed import covers that interval even where no check-in was recorded; missing imports and dates outside coverage are not interpreted as zeros. Source date/hour values follow an explicitly unverified local-calendar assumption, and repeated timestamp entries are retained.
 
-Reimports transactionally replace the generated records for the selected city cohorts instead of adding activity counts. Unrelated dataset registry records are retained. A representative area point is the mean of its valid business coordinates, not a verified postal centroid; ZIP source labels do not define a polygon.
+Reimports transactionally replace generated records for the selected city cohorts instead of adding activity counts. Unrelated dataset registry records are retained. Business pins use their listing coordinates; missing coordinates remain missing. ZIP labels and representative area points retained in the schema do not define postal polygons.
 
-The UI uses real historical activity, business snapshot information and station weather summaries. Scores, weather effects, uncertainty, forecasts, review/opening trends, and recommendations are labeled illustrations. See the [area-grain decision](adr/0001-compare-source-zip-areas.md) and [domain glossary](../CONTEXT.md).
+The three current pages use recorded activity, snapshot profiles and weather observations. Calendar projections appear within the shared date range only after imported activity coverage ends; covered zero-activity days remain recorded zeros. Unsupported businesses remain unavailable. Train the separate `models/business_forecast/` bundle with the [dataset guide](../data/README.md#current-app-projection-bundle); it records the import revision and source/code/lockfile/payload hashes, and rejects incompatible imports or artifacts on load. These estimates extrapolate archived patterns without future weather, later market changes or new-site success modeling. The older HGB area bundle is retained research and does not supply these business projections.
 
 ## Migrations
 

@@ -1,6 +1,6 @@
-# Dataset download and exploration
+# Data preparation and research
 
-Use the two exploration notebooks from the repository root. Each downloads or verifies the supplied Google Drive archive, prepares canonical local files and exports descriptive summaries.
+Prepare the source data with notebooks 01 and 02, then import it into PostgreSQL. The current app compares individual businesses within exact source categories; its optional calendar projection bundle is prepared separately. Run all commands from the repository root.
 
 | Notebook | Archive | Scope |
 | --- | --- | --- |
@@ -32,7 +32,32 @@ uv run --frozen --group notebooks jupyter nbconvert \
 
 Keep source notebook outputs empty. The executed copies are `data/processed/yelp/01_yelp_dataset_exploration.executed.ipynb` and `data/processed/climate/02_climate_dataset_exploration.executed.ipynb`. Raw files, executed copies and generated artifacts stay local and are ignored by Git.
 
-## Location forecast POC
+## Current app projection bundle
+
+After importing the source data, train the individual-business calendar models outside Streamlit:
+
+```sh
+uv run --frozen --env-file .env python scripts/train_business_forecast.py
+```
+
+Training reads the imported PostgreSQL cohort and requires complete declared activity coverage for 2017–2021. It compares `overall_mean` and `month_weekday_shrunk` using 2020 validation after fitting 2017–2019, assesses both on 2021 after fitting 2018–2020, then refits the selected model on 2019–2021. Each fit fixes membership to businesses with activity on or before its training start and at least 20 check-ins within that window. The month/weekday model shrinks individual patterns toward the same city/state/parent-category pool.
+
+The default output is `models/business_forecast/`:
+
+| File | Purpose |
+| --- | --- |
+| `businesses.json` | Supported individual businesses, exact source tags and fitted calendar rates |
+| `manifest.json` | Training/evaluation bounds, metrics, import revision and source/code/lockfile/payload hashes |
+
+Transfer both files with the matching code, `uv.lock` and imported database revision. Loading rejects missing or altered payloads, changed imports, and code or lockfile mismatches; retrain after those inputs change. Artifacts remain local and ignored by Git. Training does not run during page rendering.
+
+The shared date range determines where estimates appear: covered dates use recorded check-ins, including zero days; only dates after the imported activity endpoint may use projections. Unsupported businesses remain unavailable. The model has no weather features and extrapolates archived calendar patterns; it does not estimate future weather, market growth, revenue or the success of a new shop. See [business workspace](../docs/business-location-workspace.md) and [projection interpretation](../docs/business-location-workspace.md#interpretation).
+
+## Retained location-model research
+
+Notebooks 03–04 document the earlier area-level weather-model experiments. Their rates, catalogs and `models/location_forecast/` bundle are separate from the current individual-business app. References below to the former Forecast UI describe that research workflow; the current pages use `models/business_forecast/`. These notebooks remain useful for reproducing experiments and reports.
+
+### Location forecast POC
 
 After the raw files are prepared, open [03 — Location forecast POC](../notebooks/03_location_forecast_poc.ipynb) in the same Jupyter environment. No database or new download is required. The notebook compares three daily models: `calendar_mean`, `poisson_weather` and `hgb_weather`. The target is recorded daily check-ins divided by the fixed historical cohort's business count, for Restaurants and Day Spas. Philadelphia, Nashville and Tampa use dataset-limited county groups rather than official metro boundaries.
 
@@ -68,9 +93,9 @@ uv run --frozen --group notebooks jupyter nbconvert \
 
 Keep source notebook outputs empty. CSVs, the manifest and `03_location_forecast_poc.executed.ipynb` are saved under `data/processed/location_forecast_poc/` and ignored by Git.
 
-## Full history forecast training
+### Full history forecast training
 
-[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb) follows the POC comparison with a reportable training workflow and the model bundle used by **Demand forecast**. Run notebooks 01 and 02 first; notebook 04 reads the verified local Yelp and ACIS files without PostgreSQL or additional downloads. Use the same notebook environment and **Restart Kernel and Run All**.
+[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb) follows the POC comparison with a reportable training workflow and the retained area-level HGB bundle. Run notebooks 01 and 02 first; notebook 04 reads the verified local Yelp and ACIS files without PostgreSQL or additional downloads. Use the same notebook environment and **Restart Kernel and Run All**.
 
 The steps verify source fingerprints, build county-based metro/category cohorts, aggregate daily check-ins, validate station weather, evaluate HGB against the calendar baseline, refit on the full usable history, and verify exported artifacts. Categories remain Restaurants and Day Spas in Philadelphia, Nashville and Tampa. This is the full available history within that declared scope, not every Yelp city or industry.
 
@@ -98,12 +123,12 @@ Keep source notebook outputs empty. The executed copy is saved at `data/processe
 | `models/location_forecast/baseline.csv` | Full-training historical calendar comparison |
 | `models/location_forecast/manifest.json` | Training bounds, features, evaluation scope, versions and artifact hashes |
 
-The app verifies the bundle before loading it and never trains or reads activity during prediction. Choose any date and supply weather, or choose a date with complete observed station weather; observed mode reports areas excluded for missing weather. Both modes rank known source areas by the expected recorded daily rate. There is no weather forecast service or 2026 accuracy validation.
+The research loader verifies the bundle before loading it and never trains or reads activity during prediction. Supply weather for a requested date, or use a date with complete observed station weather; observed mode reports areas excluded for missing weather. Results rank known source areas by the expected recorded daily rate. There is no weather forecast service or 2026 accuracy validation.
 
-Reports and model artifacts stay local and are ignored by Git. A fresh checkout or deployment must run notebook 04 or receive its complete trusted bundle at the expected model path. Run the local app from the repository root; the container expects `/app/models/location_forecast/`. Match the recorded runtime package versions when transferring artifacts; incompatible or incomplete bundles show setup guidance in the UI.
+Reports and model artifacts stay local and are ignored by Git. To reproduce this research, run notebook 04 or receive its complete trusted bundle under `models/location_forecast/`, matching the recorded runtime package versions. This bundle is not required for the current business pages.
 
-To connect recorded activity and forecasts on the same map-chart axis, prepare the exact
-original cohort reference from the completed run that produced the installed bundle:
+For the retained area-level research views, prepare the exact original cohort reference
+from the completed run that produced the installed HGB bundle:
 
 ```sh
 uv run --frozen python scripts/prepare_forecast_cohort.py \
@@ -113,8 +138,8 @@ uv run --frozen python scripts/prepare_forecast_cohort.py \
 This verifies the run's source and artifact hashes against the current bundle, then copies
 `final_cohort.csv`, `final_areas.csv`, and the parent manifest into
 `models/location_forecast/cohort/`. Transfer this small directory with the model bundle.
-The app queries recorded activity for those exact members and uses the original denominator;
-it never uses snapshot business counts. Missing or changed members invalidate their ZIP's
+The retained area-level views query recorded activity for those exact members using the
+original denominator rather than snapshot business counts. Missing or changed members invalidate their ZIP's
 normalization. Missing references keep the count and rate axes separate. Preparation does
 not retrain or alter model weights.
 
@@ -133,7 +158,8 @@ Use the same layout for both datasets: `data/downloads/` holds cached archives, 
 | `data/processed/climate/` | Climate quality/coverage/scenario CSVs, figures and `manifest.json` |
 | `data/processed/location_forecast_poc/` | Forecast comparison/ranking CSVs, manifest and executed POC notebook |
 | `data/processed/full_history_forecast/` | Full-history training report, evaluation/coverage exports and executed notebook |
-| `models/location_forecast/` | Trusted fitted model and catalog/weather/baseline bundle used by Demand forecast |
+| `models/business_forecast/` | Current individual-business calendar bundle: `businesses.json` and `manifest.json` |
+| `models/location_forecast/` | Retained area-level HGB research bundle and original cohort references |
 
 The Yelp ZIP contains a gzip-compressed TAR. Notebook 01 streams it once to stage the required tables; it does not extract complete review, user or tip tables. Subsequent runs reuse staged files only when the archive, sample size and staged fingerprints match. The review prefix is descriptive and is not a random sample.
 
@@ -174,7 +200,7 @@ Credit the U.S. Climate Resilience Toolkit Climate Explorer, ACIS, Livneh and LO
 
 ## Seed the application database
 
-Only after notebooks 01 and 02 finish successfully, configure local `.env` from `.env.example` as described in [Database setup](../docs/database.md). Start PostgreSQL, apply migrations, and import Yelp and station weather together:
+After notebooks 01 and 02 finish, configure local `.env` using [Local development](../docs/agents/local-development.md). Start PostgreSQL, apply migrations, and import Yelp and station weather together:
 
 ```sh
 docker compose up --detach --wait db
@@ -192,6 +218,8 @@ The optional NOAA LCDv2 acquisition stores original compressed station/year CSVs
 a normalized routine-hourly snapshot, and checksum manifests under
 `data/raw/hourly_weather/`. It supports Philadelphia, Nashville and Tampa airport
 observations. This source supplies richer weather boxplot samples, while ACIS daily
-weather remains the source for model inputs, mapped summaries and correlations.
+weather remains the source for mapped summaries, correlations and retained
+area-level weather-model inputs. The current business projection model has no
+weather features.
 Downloads and imports run explicitly through `scripts/prepare_hourly_weather.py`;
 they never run during Streamlit rendering. See [the hourly weather guide](../docs/hourly-weather.md).
