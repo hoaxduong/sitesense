@@ -56,6 +56,7 @@ def test_packaged_migration_checksums_match_contents() -> None:
         "001_datasets",
         "002_basic_app",
         "003_station_weather",
+        "004_hourly_weather",
     ]
     for migration in migrations:
         assert migration.checksum == hashlib.sha256(migration.sql.encode()).hexdigest()

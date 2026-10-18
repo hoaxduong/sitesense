@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 import streamlit as st
 
-from sitesense import forecast, forecast_ui, scientific, scientific_evidence
+from sitesense import (
+    forecast,
+    forecast_ui,
+    hourly_weather,
+    scientific,
+    scientific_evidence,
+    weather_charts,
+)
 from sitesense.database import ConfigurationError
 from sitesense.models import CandidateArea, Filters
 
@@ -18,7 +25,7 @@ if TYPE_CHECKING:
     from sitesense.ui import ScreenContext
 
 CHARTS = {
-    "Weather patterns": ("Box plot", "Weather relationship", "Calendar heatmap"),
+    "Weather patterns": ("Activity and weather over time", "Calendar heatmap"),
     "Model diagnostics": ("Predicted vs. observed", "Residuals", "Weather response (ICE)"),
 }
 COLORS = ("#287359", "#467caa", "#b07835", "#7b668e")
@@ -56,11 +63,6 @@ def _response(
     return scientific_evidence.response_curves(bundle, filters, areas, variable)
 
 
-@st.cache_data(ttl=300, max_entries=32, show_spinner=False)
-def _trend(rows: list[dict[str, Any]], metric: str) -> list[dict[str, Any]]:
-    return scientific.weather_trend(rows, metric)
-
-
 def _color(labels: list[str]) -> dict[str, Any]:
     return {
         "field": "ZIP area",
@@ -75,147 +77,131 @@ def _chart(rows: list[dict[str, Any]], spec: dict[str, Any], title: str, key: st
     st.vega_lite_chart(rows, spec, height=360, width="stretch", key=key + "_plot", alt=title)
 
 
-def _box(
-    rows: list[dict[str, Any]], metric: str, unit: str, labels: list[str], points: bool, key: str
+def _timeline(
+    rows: list[dict[str, Any]],
+    metric: str,
+    unit: str,
+    labels: list[str],
+    key: str,
+    *,
+    hourly_weather_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    data = scientific.box_rows(rows, metric, points)
-    if not data:
-        st.info("No accepted same-day weather/activity pairs for this variable.")
-        return []
-    groups = (
-        ["Dry", "0–5 mm", "5–15 mm", "15+ mm"]
-        if metric == "Precipitation"
-        else ["Below 5°C", "5–15°C", "15–25°C", "25°C+"]
+    if metric == "Precipitation":
+        hourly_weather_rows = None
+    start = min(date.fromisoformat(row["Date"]) for row in rows)
+    end = max(date.fromisoformat(row["Date"]) for row in rows)
+    activity = [dict(row, Kind="Activity") for row in rows]
+    measures = (
+        ("Daily low temperature", "Daily high temperature")
+        if metric == "Temperature"
+        else (metric,)
     )
-    encoding: dict[str, Any] = {
-        "x": {"field": "Weather group", "type": "nominal", "sort": groups, "title": metric},
-        "xOffset": {"field": "ZIP area", "type": "nominal", "sort": labels},
-        "color": _color(labels),
-        "tooltip": [
-            {"field": name}
-            for name in (
-                "ZIP area",
-                "Weather group",
-                "Days",
-                "Median",
-                "Q1",
-                "Q3",
-                "Date",
-                "Activity",
-                "Recorded check-ins",
-                "Cohort businesses",
-            )
-        ],
+    weather_color: dict[str, Any] = {
+        "field": "Series",
+        "type": "nominal",
+        "scale": {
+            "domain": ["Temperature"] if metric == "Temperature" else list(measures),
+            "range": ["#1c639b"] if metric == "Precipitation" else ["#e67e22"],
+        },
+        "legend": {"orient": "top", "title": "Weather", "columns": 1, "labelLimit": 260},
     }
-    layers = []
-    for mark, field, field2 in (
-        ({"type": "rule"}, "Whisker low", "Whisker high"),
-        ({"type": "bar", "opacity": 0.3}, "Q1", "Q3"),
-        ({"type": "tick", "thickness": 2, "size": 22}, "Median", None),
-    ):
-        y = {"field": field, "type": "quantitative", "title": unit, "scale": {"zero": True}}
-        enc: dict[str, Any] = {"y": y}
-        if field2:
-            enc["y2"] = {"field": field2}
-        layers.append(
-            {"transform": [{"filter": "datum.Kind === 'Box'"}], "mark": mark, "encoding": enc}
-        )
-    layers.append(
-        {
-            "transform": [{"filter": "datum.Kind === 'Point'"}],
-            "mark": {"type": "point", "filled": True, "opacity": 0.35, "size": 22},
-            "encoding": {"y": {"field": "Activity", "type": "quantitative", "title": unit}},
-        }
-    )
-    _chart(
-        data,
-        {"encoding": encoding, "layer": layers},
-        "Activity distributions by weather group",
-        key,
-    )
-    st.caption(
-        "Boxes show median and middle 50% of days; whiskers extend to the last observation "
-        "within 1.5 × IQR. Groups below 8 days show individual points instead. "
-        "Hover for each ZIP's sample size; missing weather days are excluded."
-    )
-    return data
-
-
-def _scatter(
-    rows: list[dict[str, Any]], metric: str, unit: str, labels: list[str], points: bool, key: str
-) -> list[dict[str, Any]]:
-    pairs = scientific.paired(rows, metric)
-    if not pairs:
-        st.info("No accepted same-day weather/activity pairs for this variable.")
-        return []
-    means = _trend(rows, metric)
-    stride = max(1, (len(pairs) + 1499) // 1500)
-    data = [dict(row, Kind="Daily") for row in pairs[::stride]] if points else []
-    data.extend(dict(row, Kind="Mean") for row in means)
-    if not data:
-        st.info("Too few paired days per bin. Show individual days or choose a longer range.")
-        return []
-    layers: list[dict[str, Any]] = [
-        {
-            "transform": [{"filter": "datum.Kind === 'Mean' && isValid(datum.Lower)"}],
-            "mark": {"type": "area", "opacity": 0.13},
-            "encoding": {
-                "y": {"field": "Lower", "type": "quantitative", "title": unit},
-                "y2": {"field": "Upper"},
-            },
-        },
-        {
-            "transform": [{"filter": "datum.Kind === 'Mean'"}],
-            "mark": {"type": "line", "strokeWidth": 2, "point": True},
-            "encoding": {"y": {"field": "Activity", "type": "quantitative", "title": unit}},
-        },
-        {
-            "transform": [{"filter": "datum.Kind === 'Daily'"}],
-            "mark": {"type": "point", "filled": True, "size": 20, "opacity": 0.25},
-            "encoding": {"y": {"field": "Activity", "type": "quantitative", "title": unit}},
-        },
-    ]
-    _chart(
-        data,
-        {
-            "encoding": {
-                "x": {
-                    "field": "Weather value",
-                    "type": "quantitative",
-                    "title": scientific.WEATHER[metric][1],
-                    "scale": {"zero": metric == "Precipitation"},
+    weather_samples = (
+        [dict(row, Kind="Weather") for row in hourly_weather_rows]
+        if hourly_weather_rows
+        else [
+            dict(
+                row,
+                Kind="Weather",
+                Series=measure,
+                **{
+                    "Weather source": "Recorded station weather",
+                    "Weather station": "Mapped stations (daily mean)",
+                    "Weather metric": scientific.WEATHER[measure][1],
+                    "Observation frequency": "Daily summaries",
                 },
-                "color": _color(labels),
-                "tooltip": [
-                    {"field": name}
-                    for name in (
-                        "ZIP area",
-                        "Kind",
-                        "Date",
-                        "Weather value",
-                        "Activity",
-                        "Days",
-                        "Weeks",
-                        "Lower",
-                        "Upper",
-                        "Cohort businesses",
-                    )
-                ],
+            )
+            for measure in measures
+            for row in scientific.paired(rows, measure)
+        ]
+    )
+    if hourly_weather_rows and metric == "Precipitation":
+        weather_color["scale"]["domain"] = ["Precipitation mm"]
+    weather = weather_charts.weather_boxplot_display_rows(
+        weather_charts.weather_boxplot_rows(
+            weather_samples,
+            start,
+            end,
+            combine_temperature=metric == "Temperature",
+        )
+    )
+    if hourly_weather_rows:
+        weather = [dict(row, **{"ZIP area": label}) for label in labels for row in weather]
+    data = activity + weather
+    weather_layer = weather_charts.weather_boxplot_layer(
+        start,
+        end,
+        title="Temperature (°C)"
+        if metric == "Temperature"
+        else "Precipitation (mm/day)"
+        if metric == "Precipitation"
+        else scientific.WEATHER[metric][1],
+        color=weather_color,
+    )
+    weather_layer["transform"] = [{"filter": "datum.Kind === 'Weather'"}]
+    weather_layer["encoding"]["detail"].append({"field": "Series", "type": "nominal"})
+    weather_layer["encoding"]["tooltip"].append({"field": "Series", "title": "Weather variable"})
+    activity_layer = {
+        "transform": [{"filter": "datum.Kind === 'Activity'"}],
+        "mark": {"type": "line", "interpolate": "monotone", "strokeWidth": 2, "point": True},
+        "encoding": {
+            "x": {
+                "field": "Date",
+                "type": "temporal",
+                "title": "Date",
+                "scale": {"type": "utc", "domain": [start.isoformat(), end.isoformat()]},
+                "axis": {"format": "%d %b %Y"},
             },
-            "layer": layers,
+            "y": {
+                "field": "Activity",
+                "type": "quantitative",
+                "title": unit,
+                "axis": {"orient": "left"},
+                "scale": {"zero": True},
+            },
+            "color": _color(labels),
+            "tooltip": [
+                {"field": name}
+                for name in (
+                    "Date",
+                    "ZIP area",
+                    "Activity",
+                    "Activity source",
+                    "Recorded check-ins",
+                    "Cohort businesses",
+                )
+            ],
         },
-        "Activity against same-day weather with week-cluster confidence intervals",
-        key,
-    )
+    }
+    for index, label in enumerate(labels):
+        st.caption(label)
+        _chart(
+            [row for row in data if row["ZIP area"] == label],
+            {
+                "layer": [weather_layer, activity_layer],
+                "resolve": {"scale": {"y": "independent", "color": "independent"}},
+                "config": {"numberFormat": ".1f"},
+            },
+            "Daily activity line and weather boxplots over time for " + label,
+            key + f"_timeline_{index}",
+        )
+        if not any(row["ZIP area"] == label for row in weather):
+            st.caption("No accepted weather for this ZIP and variable; recorded activity is shown.")
     st.caption(
-        f"{len(pairs):,} paired ZIP-days; lines use up to 8 equal-width weather bins, "
-        "with at least 8 days per bin. Shading: exploratory 95% percentile confidence "
-        "intervals for the mean, resampling calendar-week clusters 300 times "
-        "(at least 4 contributing weeks). Intervals assume comparable weeks; "
-        "they are not seasonally adjusted effects or prediction intervals."
+        "Lines show daily recorded activity on the left axis; weather boxes use the right axis. "
+        "Each ZIP has its own timeline, retaining activity on days with missing weather."
     )
-    if points and stride > 1:
-        st.caption(f"Showing {len(pairs[::stride]):,} daily points; summaries use all paired days.")
+    st.caption(hourly_weather.caption(hourly_weather_rows or [], metric=metric))
+    st.caption(weather_charts.weather_boxplot_caption(start, end))
     return data
 
 
@@ -319,7 +305,7 @@ def _historical(
                 location_map._station_cells(context), *covered, context.import_revision
             )
         except (ConfigurationError, psycopg.Error):
-            st.info("Recorded station weather is unavailable. Try Calendar heatmap.")
+            st.info("Recorded station weather is unavailable. Daily activity remains visible.")
     rows = scientific.recorded_rows(
         records if normalized and records is not None else context.records,
         areas,
@@ -482,21 +468,27 @@ def render(context: "ScreenContext", area_ids: tuple[int, ...], key: str) -> Non
         st.caption(" · ".join(labels))
         metric = "Precipitation"
         if chart not in ("Calendar heatmap", "Predicted vs. observed"):
-            options = tuple(scientific.WEATHER)
+            options = (
+                ("Precipitation", "Temperature")
+                if family == "Weather patterns"
+                else tuple(scientific.WEATHER)
+            )
             if chart == "Residuals":
                 options = ("Predicted activity", *options)
+            metric_key = "science_residual_x" if chart == "Residuals" else "science_weather"
+            if st.session_state.get(metric_key) not in options:
+                st.session_state[metric_key] = options[0]
             metric = str(
                 st.selectbox(
                     "Residual x-axis" if chart == "Residuals" else "Weather variable",
                     options,
-                    key="science_residual_x" if chart == "Residuals" else "science_weather",
+                    key=metric_key,
                     persist_state="session",
                 )
             )
         st.subheader(
             {
-                "Box plot": "Activity distribution by weather",
-                "Weather relationship": "Activity and weather relationship",
+                "Activity and weather over time": "Activity and weather over time",
                 "Calendar heatmap": "Monthly and weekday activity patterns",
                 "Predicted vs. observed": "Predicted versus recorded activity",
                 "Residuals": "Prediction error patterns",
@@ -512,24 +504,32 @@ def render(context: "ScreenContext", area_ids: tuple[int, ...], key: str) -> Non
                     "weather relationships; future forecasts are not observed activity."
                 )
                 return
-            points = False
-            if chart in ("Box plot", "Weather relationship"):
-                points = st.checkbox(
-                    "Show individual days",
-                    value=chart == "Weather relationship",
-                    key="science_points_" + chart,
-                    persist_state="session",
+            if chart == "Activity and weather over time":
+                hourly_rows = (
+                    []
+                    if metric == "Precipitation"
+                    else hourly_weather.chart_rows(
+                        hourly_weather.load_samples(
+                            context.filters.city,
+                            context.filters.state,
+                            min(date.fromisoformat(row["Date"]) for row in rows),
+                            max(date.fromisoformat(row["Date"]) for row in rows),
+                        ),
+                        metric,
+                    )
                 )
-            if chart == "Box plot":
-                result = _box(rows, metric, unit, labels, points, key)
-            elif chart == "Weather relationship":
-                result = _scatter(rows, metric, unit, labels, points, key)
+                result = _timeline(rows, metric, unit, labels, key, hourly_weather_rows=hourly_rows)
+                if hourly_rows:
+                    hourly_panel = st.expander("Hourly station observations", on_change="rerun")
+                    if hourly_panel.open:
+                        with hourly_panel:
+                            st.caption(hourly_weather.caption(hourly_rows))
+                            _download(hourly_rows, key + "_hourly", "NOAA observed hourly weather")
             else:
                 result = _calendar(rows, unit, labels, key)
             if chart != "Calendar heatmap":
                 st.caption(
-                    "Station weather uses the mean of available mapped stations on each date. "
-                    "Recorded zeros are retained; missing weather is excluded. "
+                    "Recorded zeros are retained; missing weather is excluded from weather boxes. "
                     "These are descriptive associations, not causal weather effects."
                 )
             # Keep original daily inputs available for reproducibility, including missing weather.

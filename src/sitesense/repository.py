@@ -6,7 +6,7 @@ import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from statistics import mean
 
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
@@ -19,6 +19,7 @@ from sitesense.models import (
     Catalog,
     DateCoverage,
     Filters,
+    HourlyWeatherSample,
     StationWeatherMonth,
     StationWeatherSummary,
     WeatherCell,
@@ -27,6 +28,46 @@ from sitesense.models import (
 
 class DataUnavailableError(ValueError):
     """A completed basic-app import is required; this message contains no secrets."""
+
+
+def get_hourly_weather_revision() -> str | None:
+    """Keep chart-only weather refreshes independent of daily model provenance."""
+    with connect() as connection:
+        row = connection.execute(
+            """SELECT metadata ->> 'import_revision' FROM sitesense.datasets
+               WHERE metadata ->> 'import_key' = 'basic_app_hourly_weather_v1'
+                 AND metadata ->> 'status' = 'complete'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def load_hourly_weather(
+    city: str, state: str, start: date, end: date
+) -> tuple[HourlyWeatherSample, ...]:
+    """Read representative airport samples without changing the mapped ACIS source."""
+    if end < start:
+        raise ValueError("The end date must be on or after the start date.")
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT h.station_id, h.station_name, h.observation_time_local_standard,
+                      h.utc_offset_hours, h.temperature_c, h.precipitation_mm, h.is_trace
+               FROM sitesense.hourly_weather_observations h
+               JOIN sitesense.datasets d ON d.id = h.dataset_id
+               WHERE h.city = %s AND h.state = %s
+                 AND h.observation_time_local_standard >= %s
+                 AND h.observation_time_local_standard < %s
+                 AND d.metadata ->> 'import_key' = 'basic_app_hourly_weather_v1'
+                 AND d.metadata ->> 'status' = 'complete'
+               ORDER BY h.station_id, h.observation_time_local_standard""",
+            (
+                city,
+                state,
+                datetime.combine(start, time()),
+                datetime.combine(end + timedelta(days=1), time()),
+            ),
+        ).fetchall()
+    return tuple(HourlyWeatherSample(*row) for row in rows)
 
 
 def load_weather_coverage() -> DateCoverage | None:

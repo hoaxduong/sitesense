@@ -1,7 +1,7 @@
 """Typed records shared by the basic SiteSense screens and data importer."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,19 @@ class WeatherCell:
     longitude: float
     source_kind: str = "era5"
     station_name: str | None = None
+
+
+@dataclass(frozen=True)
+class HourlyWeatherSample:
+    """One routine airport report, using NOAA's fixed local standard clock."""
+
+    station_id: str
+    station_name: str
+    observation_time_local_standard: datetime
+    utc_offset_hours: int
+    temperature_c: float | None
+    precipitation_mm: float | None
+    is_trace: bool = False
 
 
 @dataclass(frozen=True)

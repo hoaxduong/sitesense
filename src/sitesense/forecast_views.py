@@ -7,8 +7,15 @@ from typing import Any
 
 import streamlit as st
 
+from sitesense import hourly_weather
 from sitesense.forecast_range import ForecastRange
 from sitesense.models import ActivityRecord
+from sitesense.weather_charts import (
+    weather_boxplot_caption,
+    weather_boxplot_display_rows,
+    weather_boxplot_layer,
+    weather_boxplot_rows,
+)
 
 FORECAST_SERIES = "Forecast check-ins"
 RATE_UNIT = "check-ins per historical cohort business per day"
@@ -516,200 +523,8 @@ def _view_activity_rows(
     return recorded, estimated, normalized
 
 
-def render_activity_weather_relationship(
-    result: ForecastRange,
-    area_id: int,
-    label: str,
-    records: tuple[ActivityRecord, ...],
-    covered: tuple[date, date] | None,
-    start: date,
-    end: date,
-    historical_weather_rows: list[dict[str, Any]],
-    right: str,
-    *,
-    cohort_records: tuple[ActivityRecord, ...] | None = None,
-    cohort_businesses: int | None = None,
-) -> None:
-    """Show same-day activity and weather pairs in one plot with explicit activity units."""
-    st.subheader("Activity and weather relationship")
-    recorded, estimated, normalized = _view_activity_rows(
-        result, area_id, label, records, covered, start, end, cohort_records, cohort_businesses
-    )
-    rows = _activity_weather_rows(recorded, estimated, historical_weather_rows, right)
-    recorded_pairs = sum(row["Activity source"] == "Recorded activity" for row in rows)
-    forecast_pairs = len(rows) - recorded_pairs
-    st.caption(
-        f"Recorded pairs: {recorded_pairs} of {len(recorded)} covered days; "
-        f"forecast pairs: {forecast_pairs} of {result.uncovered_days} uncovered days. "
-        "Each point pairs activity with weather on the same date; missing measurements are omitted."
-    )
-    if not rows:
-        area = result.by_area.get(area_id)
-        st.caption(
-            (area.reason if area is not None else None)
-            or result.reason
-            or "No complete same-day activity and weather pairs are available for this ZIP area."
-        )
-        return
-    series = [
-        source
-        for source, count in (
-            ("Recorded activity", recorded_pairs),
-            (FORECAST_SERIES, forecast_pairs),
-        )
-        if count
-    ]
-    colors = {"Recorded activity": "#1b9e77", FORECAST_SERIES: "#756bb1"}
-    shapes = {"Recorded activity": "circle", FORECAST_SERIES: "diamond"}
-    legend = {"orient": "top", "title": None, "columns": 2, "labelLimit": 150}
-    layers: list[dict[str, Any]] = []
-    for source in series:
-        is_forecast = source == FORECAST_SERIES
-        field = "Forecast check-ins" if is_forecast else "Recorded check-ins"
-        layers.append(
-            {
-                "transform": [{"filter": {"field": "Activity source", "equal": source}}],
-                "mark": {"type": "point", "filled": True, "size": 75, "opacity": 0.75},
-                "encoding": {
-                    "y": {
-                        "field": field,
-                        "type": "quantitative",
-                        "title": "Forecast / 100 / day" if is_forecast else "Recorded / day",
-                        "axis": {
-                            "orient": "right" if is_forecast and recorded_pairs else "left",
-                            "format": ".1f" if is_forecast else ",.0f",
-                            "grid": not (is_forecast and recorded_pairs),
-                            "labelColor": colors[source],
-                            "titleColor": colors[source],
-                        },
-                        "scale": {"zero": True},
-                    },
-                    "color": {
-                        "field": "Series",
-                        "type": "nominal",
-                        "scale": {"domain": series, "range": [colors[name] for name in series]},
-                        "legend": legend,
-                    },
-                    "shape": {
-                        "field": "Series",
-                        "type": "nominal",
-                        "scale": {"domain": series, "range": [shapes[name] for name in series]},
-                        "legend": legend,
-                    },
-                    "tooltip": [
-                        {"field": "Date", "type": "temporal", "format": "%Y-%m-%d"},
-                        {"field": "ZIP area"},
-                        {
-                            "field": field,
-                            "format": ".1f" if is_forecast else ",.0f",
-                            "title": (
-                                "Forecast check-ins / 100 historical cohort businesses / day"
-                                if is_forecast
-                                else "Recorded ZIP check-ins / day"
-                            ),
-                        },
-                        {"field": "Activity source"},
-                        {"field": "Weather metric"},
-                        {"field": "Weather value", "format": ".1f"},
-                        {"field": "Weather source"},
-                        {"field": "Weather station"},
-                        {"field": "Input weather source"},
-                    ]
-                    + ([{"field": "Outside training weather range"}] if is_forecast else []),
-                },
-            }
-        )
-    if normalized:
-        activity = layers[0]
-        activity["transform"] = [
-            {
-                "filter": {
-                    "field": "Activity source",
-                    "oneOf": ["Recorded activity", FORECAST_SERIES],
-                }
-            }
-        ]
-        activity["encoding"]["y"] = {
-            "field": "Activity check-ins",
-            "type": "quantitative",
-            "title": "Check-ins / 100 / day",
-            "axis": {"orient": "left", "format": ".1f"},
-            "scale": {"zero": True},
-        }
-        activity["encoding"]["tooltip"][2] = {
-            "field": "Activity check-ins",
-            "format": ".1f",
-            "title": "Check-ins / 100 historical cohort businesses / day",
-        }
-        activity["encoding"]["tooltip"].extend(
-            [
-                {"field": "Recorded cohort check-ins", "title": "Recorded cohort check-ins (raw)"},
-                {"field": "Historical cohort businesses"},
-                {"field": "Is forecast"},
-                {"field": "Outside training weather range"},
-            ]
-        )
-        layers = [activity]
-    st.vega_lite_chart(
-        rows,
-        {
-            "encoding": {
-                "x": {
-                    "field": "Weather value",
-                    "type": "quantitative",
-                    "title": rows[0]["Weather metric"],
-                    "scale": {"zero": right == "Precipitation"},
-                }
-            },
-            "layer": layers,
-            "resolve": {
-                "scale": {
-                    "y": "shared" if normalized else "independent",
-                    "color": "shared",
-                    "shape": "shared",
-                }
-            },
-            "autosize": {"type": "fit", "contains": "padding"},
-        },
-        height=360,
-        width="stretch",
-        alt="Same-day activity and forecasts against observed weather for the selected ZIP",
-    )
-    if normalized:
-        st.caption(
-            f"Recorded and forecast check-ins use the same verified historical cohort of "
-            f"{cohort_businesses} businesses, both in {DISPLAY_RATE_UNIT} on the left axis. "
-            "Green circles show recorded activity; purple diamonds show forecast check-ins."
-        )
-    elif recorded_pairs and forecast_pairs:
-        st.caption(
-            "Green circles: recorded ZIP check-ins per day (left axis). "
-            f"Purple diamonds: forecast estimates in {DISPLAY_RATE_UNIT} (right axis). "
-            "The axes use different units; heights are not directly comparable."
-        )
-        st.caption(
-            "Verified cohort records are unavailable; recorded totals cannot be normalized "
-            "to the forecast cohort."
-        )
-    elif forecast_pairs:
-        st.caption(f"Purple diamonds: forecast estimates in {DISPLAY_RATE_UNIT} (left axis).")
-    else:
-        st.caption("Green circles: recorded ZIP check-ins per day (left axis).")
-    if forecast_pairs:
-        st.caption(
-            "Forecast points show the model's response to observed weather inputs, "
-            "not independent evidence of a weather effect. "
-            f"{COHORT_NOTE} {WEATHER_NOTE}"
-        )
-    else:
-        st.caption(
-            "The recorded relationship is descriptive and does not establish "
-            "a causal weather effect."
-        )
-
-
 def _timeline_weather_rows(pairs: list[dict[str, Any]], metric: str) -> list[dict[str, Any]]:
-    """Retain source and date-gap provenance while connecting available weather points."""
+    """Retain dated weather samples and their source provenance."""
     rows: list[dict[str, Any]] = []
     previous_day: date | None = None
     previous_source: str | None = None
@@ -725,7 +540,11 @@ def _timeline_weather_rows(pairs: list[dict[str, Any]], metric: str) -> list[dic
             dict(
                 pair,
                 Series=metric,
-                **{"Activity source": "Observed weather", "Weather segment": str(segment)},
+                **{
+                    "Activity source": "Observed weather",
+                    "Weather segment": str(segment),
+                    "Observation frequency": "Daily summaries",
+                },
             )
         )
         previous_day, previous_source = day, source
@@ -775,10 +594,13 @@ def render_activity_weather_timeline(
     historical_weather_rows: list[dict[str, Any]],
     right: str,
     *,
+    hourly_weather_rows: list[dict[str, Any]] | None = None,
     cohort_records: tuple[ActivityRecord, ...] | None = None,
     cohort_businesses: int | None = None,
 ) -> None:
     """Overlay daily recorded activity, forecast estimates and observed weather in one plot."""
+    if right == "Precipitation":
+        hourly_weather_rows = None
     st.subheader("Activity, forecast and weather over time")
     labels = {area_id: label}
     recorded, estimated, normalized = _view_activity_rows(
@@ -792,8 +614,25 @@ def render_activity_weather_timeline(
             or "No activity or forecast estimates are available for this ZIP area."
         )
         return
-    weather = _timeline_weather_rows(
-        _activity_weather_rows(recorded, estimated, historical_weather_rows, right), right
+    weather_metrics = (
+        ("Daily high temperature", "Daily low temperature") if right == "Temperature" else (right,)
+    )
+    weather_samples = (
+        [dict(row, **{"Activity source": "Observed weather"}) for row in hourly_weather_rows]
+        if hourly_weather_rows
+        else [
+            row
+            for metric in weather_metrics
+            for row in _timeline_weather_rows(
+                _activity_weather_rows(recorded, estimated, historical_weather_rows, metric), metric
+            )
+        ]
+    )
+    weather = weather_boxplot_rows(
+        weather_samples,
+        start,
+        end,
+        combine_temperature=right == "Temperature",
     )
     rows = [dict(row, Series=row["Activity source"]) for row in recorded + estimated] + weather
     anchored = (
@@ -812,13 +651,24 @@ def render_activity_weather_timeline(
         )
     gaps = _forecast_gap_rows(estimated, covered, start, end) if result.uncovered_days else []
     rows.extend(gaps)
-    colors = {"Recorded activity": "#1b9e77", FORECAST_SERIES: "#756bb1", right: "#e67e22"}
+    weather_series = tuple(dict.fromkeys(row["Series"] for row in weather))
+    colors = {
+        "Recorded activity": "#1b9e77",
+        FORECAST_SERIES: "#756bb1",
+        **{
+            metric: "#1c639b" if right == "Precipitation" else "#e67e22"
+            for metric in weather_series
+        },
+    }
     series = [
         source
         for source, present in (
             ("Recorded activity", bool(recorded)),
             (FORECAST_SERIES, bool(estimated)),
-            (right, bool(weather)),
+            *(
+                (metric, any(row["Series"] == metric for row in weather))
+                for metric in weather_series
+            ),
         )
         if present
     ]
@@ -832,6 +682,7 @@ def render_activity_weather_timeline(
         (area_id,), labels, start, end, recorded=bool(recorded), estimated=bool(estimated)
     )
     spec["encoding"]["x"]["title"] = "Date"
+    spec["encoding"]["x"]["scale"]["type"] = "utc"
     spec["encoding"]["x"]["axis"]["title"] = "Date"
     for layer in spec["layer"]:
         encoding = layer["encoding"]
@@ -911,45 +762,23 @@ def render_activity_weather_timeline(
             }
         ]
     if weather:
-        spec["layer"].append(
-            {
-                "transform": [
-                    {"filter": {"field": "Activity source", "equal": "Observed weather"}}
-                ],
-                "mark": {"type": "line", "strokeWidth": 1.8, "point": {"filled": True, "size": 20}},
-                "encoding": {
-                    "y": {
-                        "field": "Weather value",
-                        "type": "quantitative",
-                        "title": "Rain mm/day" if right == "Precipitation" else "Weather °C",
-                        "axis": {
-                            "orient": "right",
-                            "offset": 0,
-                            "grid": False,
-                            "labelColor": colors[right],
-                            "titleColor": colors[right],
-                            "titlePadding": 8,
-                        },
-                        "scale": {"zero": right == "Precipitation"},
-                    },
-                    "color": color,
-                    "order": {"field": "Date", "type": "temporal"},
-                    "tooltip": [
-                        {"field": "Date", "type": "temporal", "format": "%Y-%m-%d"},
-                        {"field": "ZIP area"},
-                        {"field": "Weather metric"},
-                        {
-                            "field": "Weather value",
-                            "format": ".1f",
-                            "title": weather[0]["Weather metric"],
-                        },
-                        {"field": "Weather source"},
-                        {"field": "Weather station"},
-                        {"field": "Input weather source"},
-                    ],
-                },
-            }
+        weather_layer = weather_boxplot_layer(
+            start,
+            end,
+            title="Rain mm/day" if right == "Precipitation" else "Weather °C",
+            color=color,
         )
+        weather_layer["transform"] = [
+            {"filter": {"field": "Activity source", "equal": "Observed weather"}}
+        ]
+        weather_layer["encoding"]["tooltip"].extend(
+            [
+                {"field": "Weather metric"},
+                {"field": "Weather station"},
+                {"field": "Input weather source"},
+            ]
+        )
+        spec["layer"].append(weather_layer)
     if gaps:
         spec["layer"].insert(
             0,
@@ -975,13 +804,13 @@ def render_activity_weather_timeline(
             },
         )
     spec["autosize"] = {"type": "fit", "contains": "padding"}
-    spec["config"] = {"line": {"interpolate": "monotone"}}
+    spec["config"] = {"line": {"interpolate": "monotone"}, "numberFormat": ".1f"}
     st.vega_lite_chart(
-        rows,
+        weather_boxplot_display_rows(rows),
         spec,
         height=380,
         width="stretch",
-        alt="Daily recorded activity, forecast estimates and observed weather overlaid by date",
+        alt="Recorded activity and forecast lines with weekly or monthly weather boxplots by date",
     )
     if normalized:
         st.caption(
@@ -1010,10 +839,8 @@ def render_activity_weather_timeline(
     else:
         st.caption("Green: recorded ZIP check-ins per day (left axis).")
     if weather:
-        st.caption(
-            f"Orange: {weather[0]['Weather metric']} (right axis). "
-            "The line connects available observed measurements; tooltips retain each source."
-        )
+        st.caption(hourly_weather.caption(hourly_weather_rows or [], metric=right))
+        st.caption(weather_boxplot_caption(start, end))
     else:
         st.caption("No observed weather values are available for this ZIP timeline.")
     if estimated:

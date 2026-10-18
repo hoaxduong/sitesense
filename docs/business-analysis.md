@@ -60,26 +60,28 @@ reset incompatible selections; ordinary date changes retain valid business IDs.
 
 ## How does weather correlate with one business's activity?
 
-The weather section uses only the selected business's mapped ACIS station and
-accepted daily observations. Choose maximum temperature in Celsius or precipitation
-in millimeters. **Box plot** is the default chart: it compares the distribution
-of daily check-ins across fixed weather bands, with paired-day counts on each
-band. Temperature bands are below 0, 0–<10, 10–<20, 20–<30 and at least 30 °C.
-Rainfall bands are zero (dry or trace), above 0–<1, 1–<5, 5–<10, 10–<20 and at
-least 20 mm. The groups include every paired day exactly once.
+The activity/weather chart uses daily recorded check-ins as a line on the left
+and true weather boxplots on the right, with time on the x-axis. When available,
+boxes use routine hourly observations from the city's representative airport,
+shared across ZIP and business views. Temperature uses one distribution of measured
+temperatures. Precipitation uses accepted daily station totals in mm/day, including dry days. Boxes span Q1–Q3, with a
+median line, min/max whiskers and mean diamond. They group by calendar week for
+ranges up to 90 days and calendar month for longer ranges. Tooltips identify the
+station, source, frequency, sample count and hourly coverage. Missing reports are
+excluded; dry hours remain zero. A dry period can have a zero-height rainfall box.
 
-Each box spans the first to third quartiles, with a median line. Whiskers reach
-the observed values within 1.5 times the interquartile range; more extreme values
-appear as outlier points. Boxes use the raw daily counts, not averages of those
-counts. Empty groups have no box and no invented zero-valued quartiles. Groups
-with fewer than five paired days receive a warning. Zero-heavy distributions
-can collapse to a line; the band summary reports zero-activity days and exact
-quartiles alongside sample sizes.
+When hourly data is unavailable, the chart labels its daily ACIS fallback. Daily
+summary temperature combines available lows/highs; its mean describes those
+summaries rather than hourly measured temperature. Hourly and daily samples are
+never pooled into one box. See [hourly weather](hourly-weather.md).
 
-Switch **Weather chart** to **Scatter plot** to inspect the individual daily
-pairs. An optional pair of daily time-series charts and a dated observations
-table support inspection. Pearson correlation always uses the raw daily pairs,
-not the band medians, regardless of chart choice.
+Daily paired-day counts, correlations, bands and the observations table continue
+to use the selected business's mapped ACIS station. High and low temperature
+correlations remain separate from each other and from the hourly display source.
+
+The dated observations table retains missing weather. The weather-band summary
+remains available as a table with paired-day counts and activity quartiles.
+Pearson correlation uses raw daily pairs rather than period or band summaries.
 
 Activity is zero-filled only inside imported coverage; missing or rejected weather
 stays missing and is excluded from paired days. Valid zero precipitation and trace

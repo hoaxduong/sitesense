@@ -16,6 +16,12 @@ the usable business mapping coverage and weighted report coverage. Zero rainfall
 is a measured value. Areas without a usable selected metric are gray. When no
 weather measure is usable, the recorded map retains activity circles without a weather fill.
 
+The recorded time chart shows activity as a line and daily weather distributions
+as boxplots on a shared time axis. Its whole-city and selected-ZIP controls retain
+their scopes. Temperature combines daily lows and highs in a single distribution; weather
+boxes use daily means across the selected mapped stations, grouped weekly for
+ranges up to 90 days and monthly for longer ranges.
+
 Hover cards stay in the upper-left map corner to avoid clipping at edge ZIPs.
 They show the ZIP, emphasized weather value, report dates, weighted valid
 days, business coverage, and station count. Station names and individual report
@@ -51,21 +57,28 @@ anchor and excluded from prediction counts. Curves connect known forecast points
 across missing dates; gray bands identify missing forecasts by ZIP in their tooltip.
 If any selected cohort is unverified or its query fails, raw counts and forecast
 rates retain separate axes without a connecting anchor.
-The selected ZIP's map chart has a Line/Scatter control, defaulting to Line.
-With a verified original model-cohort reference, Line puts exact-cohort recorded
-activity and Forecast check-ins on one left axis in check-ins per 100 businesses
-per day, with selected observed weather on the right. The dashed forecast line
-starts at the last recorded cohort value, explicitly identified as a recorded
-anchor rather than an estimate. Available forecast and weather points connect
-across missing dates; gray bands identify dates without a forecast and do not add
-values. Without a verified reference or a successful cohort activity query, raw
-recorded counts and forecast rates retain separate axes and are not joined.
-Scatter puts weather on x and the same comparable activity unit on y when verified;
-otherwise it retains separate count/rate axes. Green circles and purple diamonds
-distinguish the sources. Each point pairs activity and the chosen weather variable on the same
-day; dates with missing measurements are omitted and reported in the paired-day
-coverage. Historical mapped-station weather is never substituted for a forecast
-point's own model inputs. Smoothed connections never add activity or weather values.
+The selected ZIP's map chart uses time on the x-axis, activity and forecast
+lines, and weather boxplots on the right axis. Temperature uses one box from observed hourly readings when available. Boxes show
+Q1–Q3, median, min/max whiskers, and a mean diamond. Station/frequency and sample
+coverage are explicit; missing hourly data uses the labeled daily-summary fallback. With a verified original
+model cohort, recorded and forecast activity share a left axis in check-ins per
+100 businesses per day. The dashed forecast line starts at the last recorded
+cohort value, explicitly identified as a recorded anchor rather than an estimate.
+Without a verified reference or successful cohort query, raw recorded counts and
+forecast rates retain separate axes and are not joined. Gray bands identify dates
+without a forecast and do not add values.
+
+Temperature boxes summarize hourly observations; precipitation boxes use accepted
+daily station totals in mm/day, including dry days. Both group by calendar week
+for ranges up to 90 days, or calendar month for longer ranges. Daily ACIS summaries are an explicit
+fallback when hourly data is unavailable, with recorded-period observations and
+observed model inputs kept separate. Boxes span Q1–Q3, with a median line,
+min/max whiskers and a mean diamond. Only the daily fallback pools low/high
+temperature summaries; hourly temperature uses measured dry-bulb readings.
+Hover retains station, frequency, dates, sample counts and hourly coverage. Partial
+periods use available readings; single-reading boxes collapse to a tick.
+Missing weather is excluded and zero rain is retained. A mostly dry period can
+have a zero-height rainfall box. Chart weather never replaces model inputs.
 Mean rates use only estimated dates, which can differ
 between ZIPs; inspect their coverage before comparing them. Comparison CSVs retain
 requested dates, recorded bounds and days, per-ZIP estimated/unavailable days,
@@ -82,14 +95,13 @@ historical rain-day association calculation.
 
 A collapsed, lazy panel follows the existing time chart on Location map and the comparison CSV on Compare sites. It uses the selected map ZIP or the current comparison ZIPs without changing their controls. A nested fragment keeps analysis controls independent of the map; chart and weather choices persist across pages. Cached city-level evaluation/model-response data is filtered by selected ZIP after loading, so changing focus does not reload that evidence. The shared Date range controls descriptive charts and sampled ICE contexts; saved evaluation uses its explicitly selected historical period instead.
 
-- **Box plot:** exact recorded cohort check-ins per 100 original cohort businesses per day when every selected ZIP has a verified reference; otherwise all selected ZIPs use raw recorded counts. It groups paired dates by rain or temperature, showing Q1/median/Q3, Tukey 1.5-IQR whiskers, and outliers. Groups below eight paired days show points only. Zero-activity days and zero rain remain valid; missing weather stays missing.
-- **Weather relationship:** same-day recorded activity/weather pairs with up to eight equal-width weather bins. Bin means require eight days. Exploratory 95% percentile confidence intervals resample calendar-week clusters 300 times with a fixed seed and require four contributing weeks. Summaries use all pairs; at most 1,500 daily points are drawn. These unadjusted associations are neither causal effects nor prediction intervals.
+- **Activity and weather over time:** one time chart per selected ZIP, with daily recorded activity lines on the left and weather boxplots on the right. Activity uses exact cohort check-ins per 100 original businesses per day when every selected ZIP is verified; otherwise it uses raw counts. Weekly or monthly boxes use the city representative airport’s observed hourly samples when available, with quartiles, median, min/max whiskers, and a mean diamond. Station, frequency, coverage, zeros and missingness are retained; daily summaries are an explicit fallback. Activity remains visible on days without weather.
 - **Calendar heatmap:** daily means by month of year and weekday, separately for each ZIP with a shared color domain. It uses recorded dates including true zero days; blank cells mean no recorded dates. It pools selected years and needs no weather observations.
 - **Predicted versus observed:** saved HGB forward-time predictions against their original recorded labels, in check-ins per 100 evaluation-cohort businesses per day. Both axes share a domain and include the perfect-prediction diagonal.
 - **Residuals:** recorded minus predicted activity, plotted against predicted activity or exact-date evaluation-station weather. Positive residuals indicate underprediction. The zero reference and evaluated/plotted row counts expose missing weather rather than substituting values.
 - **Weather response (ICE):** the trusted current model predicts over a station training-weather 5th–95th percentile grid. Thin lines vary one weather input while holding location, calendar, and other weather fixed for up to five observed-day contexts, evenly sampled from the last 30 available days within the selected dates. Temperature grids also satisfy all contexts' high/low constraints. The thick line averages these sampled curves; it is not a population PDP, causal effect, or accuracy measurement.
 
-Daily descriptive weather averages the available mapped stations independently for each variable and retains contributing-station counts in the CSV. Forecast estimates never become observed activity in these analyses. If verified cohort activity cannot be loaded, the UI labels the raw-count fallback. A forecast-only selection therefore has no recorded distribution, relationship, or calendar cells.
+Hourly chart weather is a representative city airport series, shared across ZIP panels; it is not a ZIP-specific measurement. Daily ACIS inputs remain in the reproducibility CSV and retain mapped-station counts. Forecast estimates never become observed activity in these analyses. If verified cohort activity cannot be loaded, the UI labels the raw-count fallback. A forecast-only selection therefore has no recorded timeline or calendar cells.
 
 Evaluation preparation uses `scripts/prepare_scientific_evidence.py` and the original verified notebook 04 run. It checks the installed model/source/cohort hash chain, original prediction and evaluation-catalog hashes, and the exact evaluation protocol. Only saved HGB validation 2020 and test 2021 rows are retained; rendering never re-predicts training dates with the final model or retrains. Evaluation matches city, state, category, ZIP and original evaluation N; a current business snapshot or final-cohort denominator is never substituted. Missing or mismatched evidence disables diagnostics with an explanation. These previously examined years remain exploratory backtests of the earlier evaluation fit, not an untouched assessment of the expanded final model. Deployment must include the ignored `cohort/` and `evaluation/` directories with the trusted bundle.
 

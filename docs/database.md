@@ -61,6 +61,13 @@ uv run --frozen --env-file .env python -m sitesense.database migrate
 uv run --frozen --env-file .env python -m sitesense.import_data --weather-only
 ```
 
+Observed hourly chart weather has a separate explicit acquisition/import path,
+[prepare_hourly_weather.py](../scripts/prepare_hourly_weather.py). Migration 004
+adds `hourly_weather_observations` without changing daily ACIS tables or business
+station mappings. Its completed dataset revision invalidates only hourly display
+caches; model provenance remains tied to the original daily source. See
+[hourly station weather](hourly-weather.md) for commands and sampling rules.
+
 The weather seed verifies completed source manifests and checksums, imports observations once per station/report date/variable, and updates business-to-station links in one transaction. Reruns replace that seed instead of adding observations. The existing `weather_cells` table stores spatial points for both legacy ERA5 grids and ACIS stations; `source_kind` distinguishes them. `station_weather_observations` stores normalized native Fahrenheit/inch values together with raw values, trace markers, primary/source flags, network IDs and local standard observation times. Missing values remain null.
 
 The Weather impact screen displays real station summaries in Celsius and millimeters, including accepted-day coverage. Accumulated and other flagged daily values are excluded, and trace precipitation is approximately zero with its marker retained. Station report dates have provider observation windows; these summaries do not establish an aligned activity/weather relationship. County annual/monthly climate projections remain separate local exploration inputs.

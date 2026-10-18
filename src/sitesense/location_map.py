@@ -15,6 +15,7 @@ from sitesense import (
     exploration,
     forecast_range,
     forecast_views,
+    hourly_weather,
     repository,
     scientific_views,
     ui,
@@ -22,8 +23,19 @@ from sitesense import (
 )
 from sitesense.database import ConfigurationError
 from sitesense.location_weather import DailyWeather, load_daily_station_weather
-from sitesense.models import ActivityRecord, AreaSummary, StationWeatherSummary, WeatherCell
+from sitesense.models import (
+    ActivityRecord,
+    AreaSummary,
+    StationWeatherSummary,
+    WeatherCell,
+)
 from sitesense.rain_effect import CITY, RAIN_LEVEL_LABELS, RainEffect, rain_effects
+from sitesense.weather_charts import (
+    weather_boxplot_caption,
+    weather_boxplot_display_rows,
+    weather_boxplot_layer,
+    weather_boxplot_rows,
+)
 from sitesense.weather_map import (
     MISSING_COLOR,
     PRECIPITATION_COLORS,
@@ -975,27 +987,68 @@ def _render_time_panels(
                 f"**Whole city** · all {len(context.summaries)} candidate ZIPs · "
                 f"{city_total:,} recorded check-ins"
             )
+        precipitation = right == "Precipitation"
+        hourly_rows = (
+            []
+            if precipitation
+            else hourly_weather.chart_rows(
+                hourly_weather.load_samples(
+                    context.filters.city, context.filters.state, start, end
+                ),
+                str(right),
+            )
+        )
         weather: list[dict[str, Any]] = []
-        if stations:
+        if stations and not hourly_rows:
             try:
                 daily = _daily_weather(stations, start, end, context.import_revision)
             except (ConfigurationError, psycopg.Error):
                 st.info("Station observations are unavailable. Please retry the connection.")
             else:
-                weather = weather_series(daily, station_ids, start, end, bucket)
-        rows = combined_series(
-            checkin_series(context.records, area_ids, start, end, bucket), weather, str(right)
-        )
-        precipitation = right == "Precipitation"
-        domain = ["Recorded check-ins"] + (
+                weather = weather_series(daily, station_ids, start, end, "day")
+        measures = (
             ["Precipitation mm"] if precipitation else ["Mean daily high °C", "Mean daily low °C"]
         )
-        colors = [_hex(CIRCLE_COLOR)] + (["#1c639b"] if precipitation else ["#e7893e", "#3678b4"])
+        domain = ["Recorded check-ins", "Precipitation mm" if precipitation else "Temperature"]
+        rows = [
+            {
+                "Period": row["Period"],
+                "Series": "Recorded check-ins",
+                "Value": row["Recorded check-ins"],
+                "Axis": "left",
+            }
+            for row in checkin_series(context.records, area_ids, start, end, bucket)
+        ]
+        rows.extend(
+            weather_boxplot_rows(
+                [dict(row, Axis="right") for row in hourly_rows]
+                or [
+                    {
+                        "Date": row["Period"],
+                        "Series": measure,
+                        "Weather value": row[measure],
+                        "Weather source": "ACIS · daily mean across selected mapped stations",
+                        "Weather station": "; ".join(
+                            sorted(names.get(sid, sid) for sid in station_ids)
+                        ),
+                        "Observation frequency": "Daily summaries",
+                        "Axis": "right",
+                    }
+                    for row in weather
+                    for measure in measures
+                    if measure in row
+                ],
+                start,
+                end,
+                combine_temperature=not precipitation,
+            )
+        )
+        colors = [_hex(CIRCLE_COLOR), "#1c639b" if precipitation else "#e67e22"]
         x = {
             "field": "Period",
             "type": "temporal",
             "title": None,
-            "scale": {"domain": [start.isoformat(), end.isoformat()]},
+            "scale": {"type": "utc", "domain": [start.isoformat(), end.isoformat()]},
         }
         color = {
             "field": "Series",
@@ -1008,46 +1061,44 @@ def _render_time_panels(
             {"field": "Series"},
             {"field": "Value", "format": ",.1f"},
         ]
-        right_title = "Precipitation (mm)" if precipitation else "Temperature (°C)"
+        right_title = "Precipitation (mm/day)" if precipitation else "Temperature (°C)"
+        weather_layer = weather_boxplot_layer(
+            start, end, title=f"{right_title} (boxes)", color=color, include_zip=False
+        )
+        weather_layer["transform"] = [
+            {"filter": "datum.Axis === 'right' && isValid(datum['Weather value'])"}
+        ]
+        weather_layer["encoding"]["detail"].append({"field": "Series"})
+        weather_layer["encoding"]["tooltip"].append({"field": "Series"})
         st.vega_lite_chart(
-            rows,
+            weather_boxplot_display_rows(rows),
             {
                 "layer": [
                     {
                         "transform": [{"filter": "datum.Axis === 'left'"}],
-                        "mark": {"type": "line", "strokeWidth": 2.5},
+                        "mark": {"type": "line", "interpolate": "monotone", "strokeWidth": 2.5},
                         "encoding": {
                             "x": x,
                             "y": {
                                 "field": "Value",
                                 "type": "quantitative",
-                                "title": "Recorded check-ins",
+                                "title": "Recorded check-ins (line)",
                                 "axis": {"titleColor": _hex(CIRCLE_COLOR), "orient": "left"},
                             },
                             "color": color,
                             "tooltip": tooltip,
                         },
                     },
-                    {
-                        "transform": [{"filter": "datum.Axis === 'right'"}],
-                        "mark": {"type": "line", "strokeWidth": 1.8},
-                        "encoding": {
-                            "x": x,
-                            "y": {
-                                "field": "Value",
-                                "type": "quantitative",
-                                "title": right_title,
-                                "axis": {"orient": "right", "titleColor": colors[1]},
-                            },
-                            "color": color,
-                            "tooltip": tooltip,
-                        },
-                    },
+                    weather_layer,
                 ],
                 "resolve": {"scale": {"y": "independent"}},
+                "config": {"numberFormat": ".1f"},
             },
             height=320,
-            alt=f"Recorded check-ins (left axis) and station {right_title.lower()} per {bucket}",
+            alt=(
+                f"Recorded check-ins per {bucket} as a line and observed station "
+                f"{right_title.lower()} distributions as boxes over time"
+            ),
         )
         used = sorted(names.get(i, i) for i in station_ids if i in names)
         station_note = (
@@ -1060,11 +1111,17 @@ def _render_time_panels(
         elif scope == "Selected ZIP":
             station_note += " Nearby stations report similar values to the whole-city view."
         st.caption(
-            f"One point per {bucket} "
+            f"Activity has one point per {bucket} "
             f"({'Monday weeks' if bucket == 'week' else 'calendar months'}). "
-            f"The two axes have different units; compare the shapes over time, not where the "
-            f"lines cross. {station_note}"
+            "The two axes have different units. "
+            + (
+                ""
+                if hourly_rows
+                else f"Daily weather uses selected mapped stations. {station_note}"
+            )
         )
+        st.caption(hourly_weather.caption(hourly_rows, metric=str(right)))
+        st.caption(weather_boxplot_caption(start, end))
 
 
 def _refresh_location_map() -> None:
@@ -1416,37 +1473,21 @@ def _render_activity_weather_chart(
         except (ConfigurationError, psycopg.Error):
             st.info("Recorded station weather is unavailable. Model weather inputs remain visible.")
     with st.container(border=True):
-        weather_options = ("Daily high temperature", "Daily low temperature", "Precipitation")
+        weather_options = ("Temperature", "Precipitation")
         if st.session_state.get("location_forecast_weather") not in weather_options:
             st.session_state["location_forecast_weather"] = weather_options[0]
-        weather_control, chart_control = st.columns([3, 1], gap="small")
-        with weather_control:
-            right = st.segmented_control(
-                "Weather measure",
-                weather_options,
-                required=True,
-                key="location_forecast_weather",
-                persist_state="session",
-            )
-        with chart_control:
-            chart_type = st.segmented_control(
-                "Chart type",
-                ("Line", "Scatter"),
-                default="Line",
-                required=True,
-                key="location_weather_chart_type",
-                persist_state="session",
-            )
+        right = st.segmented_control(
+            "Weather measure",
+            weather_options,
+            required=True,
+            key="location_forecast_weather",
+            persist_state="session",
+        )
         st.caption(
             f"Weather and daily activity for {selected.area.label}. "
             "Select another ZIP on the map or in its details."
         )
-        render_chart = (
-            forecast_views.render_activity_weather_timeline
-            if chart_type == "Line"
-            else forecast_views.render_activity_weather_relationship
-        )
-        render_chart(
+        forecast_views.render_activity_weather_timeline(
             estimates,
             selected.area.id,
             selected.area.label,
@@ -1456,6 +1497,18 @@ def _render_activity_weather_chart(
             context.filters.end_date,
             historical_weather,
             str(right),
+            hourly_weather_rows=[]
+            if right == "Precipitation"
+            else hourly_weather.chart_rows(
+                hourly_weather.load_samples(
+                    context.filters.city,
+                    context.filters.state,
+                    context.filters.start_date,
+                    context.filters.end_date,
+                ),
+                str(right),
+                label=selected.area.label,
+            ),
             cohort_records=cohort_records if cohort_businesses is not None else None,
             cohort_businesses=cohort_businesses,
         )

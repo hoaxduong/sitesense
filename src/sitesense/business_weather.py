@@ -8,7 +8,11 @@ from statistics import correlation
 
 from sitesense.models import DateCoverage
 
-WEATHER_METRICS = {"Max temperature (°C)": "tmax", "Precipitation (mm)": "pcpn"}
+WEATHER_METRICS = {
+    "Max temperature (°C)": "tmax",
+    "Min temperature (°C)": "tmin",
+    "Precipitation (mm)": "pcpn",
+}
 
 
 @dataclass(frozen=True)
@@ -20,14 +24,17 @@ class WeatherBand:
     upper_inclusive: bool = False
 
 
+TEMPERATURE_BANDS = (
+    WeatherBand("Temperature < 0 °C", 0),
+    WeatherBand("0 ≤ temperature < 10 °C", 10),
+    WeatherBand("10 ≤ temperature < 20 °C", 20),
+    WeatherBand("20 ≤ temperature < 30 °C", 30),
+    WeatherBand("Temperature ≥ 30 °C", None),
+)
+
 WEATHER_BANDS = {
-    "tmax": (
-        WeatherBand("Temperature < 0 °C", 0),
-        WeatherBand("0 ≤ temperature < 10 °C", 10),
-        WeatherBand("10 ≤ temperature < 20 °C", 20),
-        WeatherBand("20 ≤ temperature < 30 °C", 30),
-        WeatherBand("Temperature ≥ 30 °C", None),
-    ),
+    "tmax": TEMPERATURE_BANDS,
+    "tmin": TEMPERATURE_BANDS,
     "pcpn": (
         WeatherBand("0 mm (dry / trace)", 0, upper_inclusive=True),
         WeatherBand("0 < rain < 1 mm", 1),

@@ -185,3 +185,13 @@ uv run --frozen --env-file .env python -m sitesense.import_data
 For a weather-only refresh, complete notebook 02 with the intended snapshot, then run `uv run --frozen --env-file .env python -m sitesense.import_data --weather-only` for businesses already imported. This leaves Yelp business and activity records in place. See [Database setup](../docs/database.md) for configuration and importer refresh behavior. The app and importer do not download archives; county scenarios remain local research inputs.
 
 Check-ins represent recorded activity, not customers or revenue. Yelp timestamps have no timezone offset, while station dates use provider observation windows. Neither exploration notebook joins activity to weather or estimates causal effects.
+
+## Observed hourly chart weather
+
+The optional NOAA LCDv2 acquisition stores original compressed station/year CSVs,
+a normalized routine-hourly snapshot, and checksum manifests under
+`data/raw/hourly_weather/`. It supports Philadelphia, Nashville and Tampa airport
+observations. This source supplies richer weather boxplot samples, while ACIS daily
+weather remains the source for model inputs, mapped summaries and correlations.
+Downloads and imports run explicitly through `scripts/prepare_hourly_weather.py`;
+they never run during Streamlit rendering. See [the hourly weather guide](../docs/hourly-weather.md).

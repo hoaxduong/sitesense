@@ -20,6 +20,7 @@ from sitesense import (
     forecast_cohort,
     forecast_range,
     forecast_ui,
+    hourly_weather,
     location_map,
     repository,
     scientific_evidence,
@@ -49,6 +50,7 @@ PAGES = {"location_map": "Location map", "compare_sites": "Compare sites"}
 @pytest.fixture(autouse=True)
 def reset_data_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(hourly_weather, "load_samples", lambda *args: ())
     monkeypatch.setattr(forecast, "MODEL_DIR", tmp_path / "unavailable_forecast_bundle")
     _categories.clear()
     _catalog.clear()
@@ -61,7 +63,6 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ui._recorded_cohort_activity.clear()
     scientific_views._evaluation.clear()
     scientific_views._response.clear()
-    scientific_views._trend.clear()
 
 
 @pytest.fixture
@@ -531,7 +532,7 @@ def test_mixed_activity_and_forecast_keep_raw_counts_and_rate_units_separate(
         app.selectbox(key="date_preset").set_value("History → forecast preview").run()
         assert not app.exception
         assert all(control.key != "location_activity_source" for control in app.segmented_control)
-        assert app.segmented_control(key="location_weather_chart_type").value == "Line"
+        assert all(w.key != "location_weather_chart_type" for w in app.segmented_control)
         assert (
             next(metric.value for metric in app.metric if metric.label == "Recorded check-ins")
             == "150"
@@ -583,97 +584,6 @@ def test_mixed_activity_and_forecast_keep_raw_counts_and_rate_units_separate(
             len([row for row in default_rows if row["Activity source"] == "Forecast check-ins"])
             == 7
         )
-        charts.reset_mock()
-        app.segmented_control(key="location_weather_chart_type").set_value("Scatter").run()
-        assert not app.exception
-        assert charts.call_count == 1
-        rows, spec = charts.call_args.args[:2]
-        assert all(key not in spec for key in ("vconcat", "hconcat", "concat", "facet"))
-        assert spec["encoding"]["x"]["field"] == "Weather value"
-        assert spec["encoding"]["x"]["type"] == "quantitative"
-        assert spec["resolve"]["scale"]["y"] == "independent"
-        layers = spec["layer"]
-        assert len(layers) == 2
-        assert all(
-            key not in layer
-            for layer in layers
-            for key in ("vconcat", "hconcat", "concat", "facet", "layer")
-        )
-        assert all(layer["mark"]["type"] == "point" for layer in layers)
-        assert all("x" not in layer["encoding"] for layer in layers)
-        by_measure = {layer["encoding"]["y"]["field"]: layer for layer in layers}
-        recorded_layer = by_measure["Recorded check-ins"]
-        forecast_layer = by_measure["Forecast check-ins"]
-        assert recorded_layer["encoding"]["y"]["axis"]["orient"] == "left"
-        assert forecast_layer["encoding"]["y"]["axis"]["orient"] == "right"
-        assert spec["resolve"]["scale"]["color"] == "shared"
-        assert all(
-            layer["encoding"]["color"] == recorded_layer["encoding"]["color"] for layer in layers
-        )
-        assert recorded_layer["encoding"]["color"]["scale"]["domain"] == [
-            "Recorded activity",
-            "Forecast check-ins",
-        ]
-        recorded = [row for row in rows if row["Activity source"] == "Recorded activity"]
-        estimated = [row for row in rows if row["Activity source"] == "Forecast check-ins"]
-        assert [
-            (row["Date"], row["Recorded check-ins"], row["Weather value"]) for row in recorded
-        ] == [("2021-12-19", 0, 0.0), ("2021-12-20", 10, 5.0)]
-        assert all(row["ZIP area"] == "Area 1 (19001)" for row in recorded + estimated)
-        assert len(estimated) == 7
-        assert {row["Forecast check-ins"] for row in estimated} == {12.5}
-        assert {row["Weather value"] for row in estimated} == {20.0}
-        assert all("2022-01-02" <= row["Date"] <= "2022-01-08" for row in estimated)
-        assert any(header.value == "Activity and weather relationship" for header in app.subheader)
-        assert any("different units" in caption.value for caption in app.caption)
-        charts.reset_mock()
-        app.segmented_control(key="location_forecast_weather").set_value(
-            "Daily low temperature"
-        ).run()
-        assert not app.exception
-        assert charts.call_count == 1
-        low_rows = charts.call_args.args[0]
-        assert [
-            (row["Date"], row["Recorded check-ins"], row["Weather value"])
-            for row in low_rows
-            if row["Activity source"] == "Recorded activity"
-        ] == [("2021-12-19", 0, -5.0), ("2021-12-20", 10, 1.0), ("2021-12-21", 0, -3.0)]
-        assert {
-            row["Weather value"]
-            for row in low_rows
-            if row["Activity source"] == "Forecast check-ins"
-        } == {10.0}
-        charts.reset_mock()
-        app.segmented_control(key="location_forecast_weather").set_value("Precipitation").run()
-        assert not app.exception
-        assert charts.call_count == 1
-        precipitation_rows, precipitation_spec = charts.call_args.args[:2]
-        assert all(
-            key not in precipitation_spec for key in ("vconcat", "hconcat", "concat", "facet")
-        )
-        assert precipitation_spec["encoding"]["x"]["field"] == "Weather value"
-        assert [
-            (row["Date"], row["Recorded check-ins"], row["Weather value"])
-            for row in precipitation_rows
-            if row["Activity source"] == "Recorded activity"
-        ] == [("2021-12-19", 0, 0.0), ("2021-12-20", 10, 2.0)]
-        precipitation = [
-            row for row in precipitation_rows if row["Activity source"] == "Forecast check-ins"
-        ]
-        assert len(precipitation) == 7
-        assert {row["Weather value"] for row in precipitation} == {0.0}
-        charts.reset_mock()
-        app.selectbox(key="map_area").set_value(2).run()
-        assert not app.exception
-        assert charts.call_count == 1
-        partial_rows = charts.call_args.args[0]
-        assert [row["Date"] for row in partial_rows] == [
-            "2022-01-02",
-            "2022-01-03",
-            "2022-01-06",
-        ]
-        assert all(row["Forecast check-ins"] == 50.0 for row in partial_rows)
-        assert all(row["Weather value"] == 0.0 for row in partial_rows)
         app.selectbox(key="map_area").set_value(1).run()
         assert not app.exception
         app.button(key="map_toggle_comparison").click().run()
@@ -693,17 +603,20 @@ def test_mixed_activity_and_forecast_keep_raw_counts_and_rate_units_separate(
             "19001": 12.5,
             "19002": 50.0,
         }
-        app.segmented_control(key="location_weather_chart_type").set_value("Line").run()
-        assert not app.exception
-        for weather_measure, recorded_values, forecast_value in (
-            ("Daily high temperature", [0.0, 5.0], 20.0),
-            ("Daily low temperature", [-5.0, 1.0, -3.0], 10.0),
-            ("Precipitation", [0.0, 2.0], 0.0),
+        for weather_measure, expected in (
+            (
+                "Temperature",
+                {
+                    "Daily high temperature": ([0.0, 5.0], 20.0),
+                    "Daily low temperature": ([-5.0, 1.0, -3.0], 10.0),
+                },
+            ),
+            ("Precipitation", {"Precipitation": ([0.0, 2.0], 0.0)}),
         ):
             charts.reset_mock()
             app.segmented_control(key="location_forecast_weather").set_value(weather_measure).run()
             assert not app.exception
-            assert app.segmented_control(key="location_weather_chart_type").value == "Line"
+            assert all(w.key != "location_weather_chart_type" for w in app.segmented_control)
             assert app.selectbox(key="map_area").value == 1
             assert app.session_state["compare_areas"] == [1]
             assert app.session_state["date_range"] == selected_dates
@@ -718,8 +631,25 @@ def test_mixed_activity_and_forecast_keep_raw_counts_and_rate_units_separate(
             ]
             line_layers = line_spec["layer"]
             assert len(line_layers) == 3
-            assert all(layer["mark"]["type"] == "line" for layer in line_layers)
-            assert all("x" not in layer["encoding"] for layer in line_layers)
+            assert [layer["mark"]["type"] for layer in line_layers[:2]] == ["line", "line"]
+            assert [layer["mark"]["type"] for layer in line_layers[-1]["layer"]] == [
+                "rule",
+                "tick",
+                "tick",
+                "bar",
+                "tick",
+                "point",
+            ]
+            assert line_layers[-1]["layer"][0]["encoding"]["y"]["field"] == "Minimum"
+            assert line_layers[-1]["layer"][0]["encoding"]["y2"]["field"] == "Maximum"
+            assert line_layers[-1]["layer"][3]["encoding"]["y"]["field"] == "Q1"
+            assert line_layers[-1]["layer"][3]["encoding"]["y2"]["field"] == "Q3"
+            assert line_layers[-1]["layer"][4]["encoding"]["y"]["field"] == "Median"
+            assert line_layers[-1]["layer"][5]["mark"]["shape"] == "diamond"
+            assert line_layers[-1]["layer"][5]["encoding"]["y"]["field"] == "Mean"
+            assert line_layers[-1]["layer"][5]["encoding"]["y"]["aggregate"] == "min"
+            assert line_layers[-1]["resolve"]["scale"]["y"] == "shared"
+            assert line_layers[-1]["encoding"]["x"]["field"] == "Weather period"
             line_by_measure = {layer["encoding"]["y"]["field"]: layer for layer in line_layers}
             assert line_by_measure["Recorded check-ins"]["encoding"]["y"]["axis"]["orient"] == (
                 "left"
@@ -745,21 +675,29 @@ def test_mixed_activity_and_forecast_keep_raw_counts_and_rate_units_separate(
             assert sum(row["Recorded check-ins"] == 0 for row in line_recorded) == 29
             assert len(line_estimated) == 7
             assert {row["Forecast check-ins"] for row in line_estimated} == {12.5}
-            assert [
-                row["Weather value"]
+            recorded_values = [value for values, _ in expected.values() for value in values]
+            recorded_weather = [
+                row
                 for row in line_weather
                 if row["Weather source"] == "Recorded-period observations"
-            ] == recorded_values
+            ]
+            assert sum(row["Observed readings"] for row in recorded_weather) == len(recorded_values)
+            assert min(row["Minimum"] for row in recorded_weather) == min(recorded_values)
+            assert max(row["Maximum"] for row in recorded_weather) == max(recorded_values)
+            assert sum(
+                row["Mean"] * row["Observed readings"] for row in recorded_weather
+            ) == pytest.approx(sum(recorded_values))
             model_weather = [
                 row for row in line_weather if row["Weather source"] == "Observed model inputs"
             ]
-            assert len(model_weather) == 7
-            assert {row["Weather value"] for row in model_weather} == {forecast_value}
-        charts.reset_mock()
-        app.segmented_control(key="location_weather_chart_type").set_value("Scatter").run()
-        assert not app.exception
-        assert charts.call_count == 1
-        assert charts.call_args.args[1]["encoding"]["x"]["field"] == "Weather value"
+            forecast_values = [value for _, value in expected.values()]
+            assert sum(row["Observed readings"] for row in model_weather) == 7 * len(expected)
+            assert min(row["Minimum"] for row in model_weather) == min(forecast_values)
+            assert max(row["Maximum"] for row in model_weather) == max(forecast_values)
+            assert sum(
+                row["Mean"] * row["Observed readings"] for row in model_weather
+            ) == pytest.approx(7 * sum(forecast_values))
+            assert all(row["Record type"] == "Weather box summary" for row in line_weather)
         assert app.segmented_control(key="location_forecast_weather").value == "Precipitation"
         assert app.selectbox(key="map_area").value == 1
         assert app.session_state["compare_areas"] == [1]
@@ -1031,19 +969,10 @@ def test_forecast_service_cache_is_shared_across_zip_selection_and_comparison(
             app.button(key="map_toggle_comparison").click().run()
             assert not app.exception
             assert predict.call_count == 1
-        for chart_type in ("Line", "Scatter"):
-            app.segmented_control(key="location_weather_chart_type").set_value(chart_type).run()
+        for weather_measure in ("Temperature", "Precipitation"):
+            app.segmented_control(key="location_forecast_weather").set_value(weather_measure).run()
             assert not app.exception
-            for weather_measure in (
-                "Daily high temperature",
-                "Daily low temperature",
-                "Precipitation",
-            ):
-                app.segmented_control(key="location_forecast_weather").set_value(
-                    weather_measure
-                ).run()
-                assert not app.exception
-                assert predict.call_count == 1
+            assert predict.call_count == 1
         app.button(key="map_open_comparison").click().run()
         _follow_navigation(app, "compare_sites")
         assert app.multiselect(key="compare_areas").value == [1, 2]
@@ -1051,7 +980,7 @@ def test_forecast_service_cache_is_shared_across_zip_selection_and_comparison(
         app.button(key="comparison_view_1").click().run()
         _follow_navigation(app, "location_map")
         assert app.selectbox(key="map_area").value == 1
-        assert app.segmented_control(key="location_weather_chart_type").value == "Scatter"
+        assert all(w.key != "location_weather_chart_type" for w in app.segmented_control)
         assert app.segmented_control(key="location_forecast_weather").value == "Precipitation"
         assert predict.call_count == 1
 
@@ -1114,21 +1043,16 @@ def test_verified_cohort_normalizes_recorded_and_forecast_with_a_recorded_anchor
             == "10"
         )
         assert any("cohort of 2 businesses" in caption.value for caption in app.caption)
-        charts.reset_mock()
-        app.segmented_control(key="location_weather_chart_type").set_value("Scatter").run()
-        assert not app.exception
-        assert charts.call_count == 1
-        scatter_rows, scatter_spec = charts.call_args.args[:2]
-        assert scatter_spec["encoding"]["x"]["field"] == "Weather value"
-        assert scatter_spec["resolve"]["scale"]["y"] == "shared"
-        assert len(scatter_spec["layer"]) == 1
-        assert scatter_spec["layer"][0]["encoding"]["y"]["field"] == "Activity check-ins"
-        assert [
-            (row["Date"], row["Weather value"], row["Activity check-ins"])
-            for row in scatter_rows
-            if row["Activity source"] == "Recorded activity"
-        ] == [("2021-12-20", 5.0, 50.0), ("2022-01-01", 0.0, 100.0)]
-        assert all(row["Activity source"] != "Recorded anchor" for row in scatter_rows)
+        weather = [row for row in rows if row["Activity source"] == "Observed weather"]
+        observed = [
+            row for row in weather if row["Weather source"] == "Recorded-period observations"
+        ]
+        assert [(row["Date"], row["Weather value"]) for row in observed] == [
+            ("2021-12-20", 5.0),
+            ("2022-01-01", 0.0),
+        ]
+        assert spec["layer"][-1]["layer"][0]["mark"]["type"] == "rule"
+        assert spec["resolve"]["scale"]["y"] == "independent"
     assert len(verified_cohort_activity) == 1
     filters, include_previous_year, business_ids = verified_cohort_activity[0]
     assert (filters.start_date, filters.end_date) == (date(2021, 12, 3), date(2022, 1, 1))
@@ -1201,12 +1125,9 @@ def test_cohort_query_cache_reuses_interactions_and_invalidates_changed_evidence
     app.run()
     app.slider(key="radius_km").set_value(2.0).run()
     assert not app.exception
-    for chart_type in ("Scatter", "Line"):
-        app.segmented_control(key="location_weather_chart_type").set_value(chart_type).run()
+    for measure in ("Temperature", "Precipitation"):
+        app.segmented_control(key="location_forecast_weather").set_value(measure).run()
         assert not app.exception
-        for measure in ("Daily high temperature", "Daily low temperature", "Precipitation"):
-            app.segmented_control(key="location_forecast_weather").set_value(measure).run()
-            assert not app.exception
     assert len(verified_cohort_activity) == 1
     app.run()
     app = _custom_range(app, (date(2021, 12, 3), date(2022, 1, 9)))
@@ -2456,21 +2377,56 @@ def test_scientific_weather_charts_use_same_zip_actual_cohort_and_keep_page_cont
     app.session_state["map_science_open"] = True
     app.run()
     assert not app.exception
-    assert app.selectbox(key="science_weather_chart").value == "Box plot"
+    assert app.selectbox(key="science_weather_chart").value == "Activity and weather over time"
     assert app.selectbox(key="map_area").value == 1
     assert len(verified_cohort_activity) == 1
     with patch("sitesense.scientific_views.st.vega_lite_chart", wraps=st.vega_lite_chart) as plots:
         app.session_state["map_science_open"] = True
-        app.selectbox(key="science_weather_chart").set_value("Weather relationship").run()
+        app.run()
         assert not app.exception
         assert plots.call_count == 2
         rows, spec = plots.call_args.args[:2]
-        observations = [row for row in rows if row["Kind"] == "Daily"]
+        observations = [row for row in rows if row["Kind"] == "Activity"]
         assert sum(r["Recorded check-ins"] for r in observations) == 3
         assert all(r["Cohort businesses"] == 2 for r in observations)
         assert sum(r["Activity"] for r in observations) == 150
-        assert all(r["Weather value"] == 0 for r in observations)
-        assert spec["encoding"]["color"]["field"] == "ZIP area"
+        weather = [row for row in rows if row["Kind"] == "Weather"]
+        assert all(r["Weather value"] == 0 for r in weather)
+        weather_layer, activity_layer = spec["layer"]
+        assert weather_layer["layer"][0]["mark"]["type"] == "rule"
+        assert weather_layer["layer"][0]["encoding"]["y"]["field"] == "Minimum"
+        assert weather_layer["layer"][0]["encoding"]["y2"]["field"] == "Maximum"
+        assert weather_layer["layer"][3]["encoding"]["y"]["field"] == "Q1"
+        assert weather_layer["layer"][3]["encoding"]["y2"]["field"] == "Q3"
+        assert weather_layer["layer"][4]["encoding"]["y"]["field"] == "Median"
+        assert activity_layer["mark"]["type"] == "line"
+        app.session_state["map_science_open"] = True
+        app.selectbox(key="science_weather").set_value("Temperature").run()
+        assert not app.exception
+        temperature_rows = plots.call_args.args[0]
+        assert {row["Series"] for row in temperature_rows if row["Kind"] == "Weather"} == {
+            "Temperature"
+        }
+        temperature_boxes = [row for row in temperature_rows if row["Kind"] == "Weather"]
+        assert all(
+            row["Observed readings"] == 2 * row["Observed days"] for row in temperature_boxes
+        )
+        assert {(row["Minimum"], row["Maximum"], row["Mean"]) for row in temperature_boxes} == {
+            (2, 10, 6)
+        }
+        assert (
+            sum(row["Recorded check-ins"] for row in temperature_rows if row["Kind"] == "Activity")
+            == 3
+        )
+        app.session_state["map_science_open"] = True
+        app.session_state["science_model_chart"] = "Weather response (ICE)"
+        with patch.object(scientific_views, "_response", return_value=()):
+            app.segmented_control(key="science_family").set_value("Model diagnostics").run()
+            assert not app.exception
+            assert app.selectbox(key="science_weather").value == "Precipitation"
+            assert app.selectbox(key="science_model_chart").value == "Weather response (ICE)"
+        app.session_state["map_science_open"] = True
+        app.segmented_control(key="science_family").set_value("Weather patterns").run()
         app.session_state["map_science_open"] = True
         app.selectbox(key="science_weather_chart").set_value("Calendar heatmap").run()
         assert not app.exception

@@ -391,154 +391,6 @@ def test_weather_pairs_skip_only_missing_selected_measurements_and_never_fallbac
     ]
 
 
-def _activity_weather_script() -> None:
-    from datetime import date
-
-    import streamlit as st
-
-    from sitesense.forecast_views import render_activity_weather_relationship
-
-    render_activity_weather_relationship(
-        st.session_state["forecast"],
-        1,
-        "Old City",
-        st.session_state["records"],
-        st.session_state["covered"],
-        date(2022, 1, 18),
-        date(2022, 1, 22),
-        st.session_state["weather"],
-        st.session_state["weather_metric"],
-        cohort_records=st.session_state.get("cohort_records"),
-        cohort_businesses=st.session_state.get("cohort_businesses"),
-    )
-
-
-def _assert_single_scatter_plot(spec: dict[str, Any]) -> None:
-    """A single chart element must also contain just one plotting region."""
-
-    def check(node: Any) -> None:
-        if isinstance(node, dict):
-            assert not set(node).intersection({"vconcat", "hconcat", "concat", "facet"})
-            for value in node.values():
-                check(value)
-        elif isinstance(node, list):
-            for value in node:
-                check(value)
-
-    check(spec)
-    assert all(layer["mark"]["type"] == "point" for layer in spec["layer"])
-    alt.LayerChart.from_dict(spec, validate=True)
-
-
-def test_relationship_uses_one_weather_scatter_with_explicit_count_and_rate_axes() -> None:
-    app = AppTest.from_function(_activity_weather_script)
-    app.session_state["forecast"] = _result()
-    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 7),)
-    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
-    app.session_state["weather"] = _historical_weather()
-    app.session_state["weather_metric"] = "Daily high temperature"
-    app.run()
-
-    assert not app.exception
-    assert [heading.value for heading in app.subheader] == ["Activity and weather relationship"]
-    charts = app.get("vega_lite_chart")
-    assert len(charts) == 1
-    spec = json.loads(charts[0].proto.spec)
-    _assert_single_scatter_plot(spec)
-    assert spec["encoding"]["x"]["field"] == "Weather value"
-    assert spec["encoding"]["x"]["title"] == "Daily high temperature (°C)"
-    assert spec["resolve"]["scale"] == {"y": "independent", "color": "shared", "shape": "shared"}
-    recorded, estimated = spec["layer"]
-    assert all("x" not in layer["encoding"] for layer in spec["layer"])
-    assert recorded["encoding"]["y"]["field"] == "Recorded check-ins"
-    assert recorded["encoding"]["y"]["axis"]["orient"] == "left"
-    assert estimated["encoding"]["y"]["field"] == "Forecast check-ins"
-    assert estimated["encoding"]["y"]["axis"]["orient"] == "right"
-    color = recorded["encoding"]["color"]
-    assert estimated["encoding"]["color"] == color
-    assert color["legend"]["columns"] == 2
-    assert color["scale"] == {
-        "domain": ["Recorded activity", "Forecast check-ins"],
-        "range": ["#1b9e77", "#756bb1"],
-    }
-    assert recorded["encoding"]["shape"] == estimated["encoding"]["shape"]
-    assert recorded["encoding"]["shape"]["scale"]["range"] == ["circle", "diamond"]
-    assert "baseline" not in charts[0].proto.spec.lower()
-    captions = " ".join(caption.value for caption in app.caption)
-    assert "Recorded pairs: 1 of 2 covered days; forecast pairs: 2 of 3 uncovered days" in captions
-    assert DISPLAY_RATE_UNIT in captions
-    assert "heights are not directly comparable" in captions
-    assert "not independent evidence of a weather effect" in captions
-    assert "not an operational forecast" in captions
-
-
-@pytest.mark.parametrize(
-    ("metric", "title"),
-    [
-        ("Daily high temperature", "Daily high temperature (°C)"),
-        ("Daily low temperature", "Daily low temperature (°C)"),
-        ("Precipitation", "Precipitation (mm/day)"),
-    ],
-)
-def test_forecast_only_relationship_has_one_rate_axis_and_selected_weather_unit(
-    metric: str, title: str
-) -> None:
-    app = AppTest.from_function(_activity_weather_script)
-    app.session_state["forecast"] = _result()
-    app.session_state["records"] = ()
-    app.session_state["covered"] = None
-    app.session_state["weather"] = _historical_weather()
-    app.session_state["weather_metric"] = metric
-    app.run()
-
-    assert not app.exception
-    charts = app.get("vega_lite_chart")
-    assert len(charts) == 1
-    spec = json.loads(charts[0].proto.spec)
-    _assert_single_scatter_plot(spec)
-    (activity,) = spec["layer"]
-    assert activity["encoding"]["y"]["field"] == "Forecast check-ins"
-    assert activity["encoding"]["y"]["axis"]["orient"] == "left"
-    assert spec["encoding"]["x"]["title"] == title
-    assert spec["encoding"]["x"]["scale"]["zero"] is (metric == "Precipitation")
-
-
-def test_recorded_only_relationship_has_one_count_axis() -> None:
-    app = AppTest.from_function(_activity_weather_script)
-    app.session_state["forecast"] = ForecastRange(areas=(), uncovered_days=0)
-    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 7),)
-    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
-    app.session_state["weather"] = _historical_weather()
-    app.session_state["weather_metric"] = "Daily high temperature"
-    app.run()
-
-    assert not app.exception
-    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
-    _assert_single_scatter_plot(spec)
-    (activity,) = spec["layer"]
-    assert activity["encoding"]["y"]["field"] == "Recorded check-ins"
-    assert activity["encoding"]["y"]["axis"]["orient"] == "left"
-    assert activity["encoding"]["color"]["scale"]["domain"] == ["Recorded activity"]
-
-
-def test_relationship_without_complete_pairs_shows_counts_instead_of_empty_plot() -> None:
-    app = AppTest.from_function(_activity_weather_script)
-    app.session_state["forecast"] = ForecastRange(areas=(), uncovered_days=3)
-    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 7),)
-    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
-    app.session_state["weather"] = []
-    app.session_state["weather_metric"] = "Daily high temperature"
-    app.run()
-
-    assert not app.exception
-    assert not app.get("vega_lite_chart")
-    assert (
-        "Recorded pairs: 0 of 2 covered days; forecast pairs: 0 of 3 uncovered days"
-        in app.caption[0].value
-    )
-    assert "No complete same-day" in app.caption[1].value
-
-
 def test_weather_timeline_breaks_on_missing_dates_and_adjacent_source_changes() -> None:
     recorded = _recorded_rows(
         (),
@@ -584,6 +436,7 @@ def _activity_weather_timeline_script() -> None:
         date(2022, 1, 22),
         st.session_state["weather"],
         st.session_state["weather_metric"],
+        hourly_weather_rows=st.session_state.get("hourly_weather_rows"),
         cohort_records=st.session_state.get("cohort_records"),
         cohort_businesses=st.session_state.get("cohort_businesses"),
     )
@@ -593,6 +446,8 @@ def _assert_single_line_plot(spec: dict[str, Any]) -> None:
     def check(node: Any) -> None:
         if isinstance(node, dict):
             assert not set(node).intersection({"vconcat", "hconcat", "concat", "facet"})
+            if "mark" in node:
+                assert node["mark"]["type"] in {"line", "rect", "rule", "tick", "bar", "point"}
             for value in node.values():
                 check(value)
         elif isinstance(node, list):
@@ -600,7 +455,6 @@ def _assert_single_line_plot(spec: dict[str, Any]) -> None:
                 check(value)
 
     check(spec)
-    assert all(layer["mark"]["type"] in {"line", "rect"} for layer in spec["layer"])
     alt.LayerChart.from_dict(spec, validate=True)
 
 
@@ -643,12 +497,20 @@ def test_line_view_shares_one_date_plot_with_independent_count_rate_weather_axes
         ("2022-01-22", 0.3),
     ]
     assert [row["Segment"] for row in estimated_rows] == ["1:0", "1:1"]
-    assert [(row["Date"], row["Weather value"]) for row in weather_rows] == [
-        ("2022-01-18", 0.0),
-        ("2022-01-20", 12.0),
-        ("2022-01-22", 12.0),
+    assert [
+        (
+            row["First report"],
+            row["Last report"],
+            row["Minimum"],
+            row["Maximum"],
+            row["Observed readings"],
+        )
+        for row in weather_rows
+    ] == [
+        ("2022-01-18", "2022-01-18", 0, 0, 1),
+        ("2022-01-20", "2022-01-22", 12, 12, 2),
     ]
-    assert [row["Weather segment"] for row in weather_rows] == ["0", "1", "2"]
+    assert len(weather_rows) == 2
     charts = app.get("vega_lite_chart")
     assert len(charts) == 1
     spec = json.loads(charts[0].proto.spec)
@@ -660,7 +522,24 @@ def test_line_view_shares_one_date_plot_with_independent_count_rate_weather_axes
     assert spec["encoding"]["x"]["scale"]["domain"] == ["2022-01-18", "2022-01-22"]
     assert spec["resolve"]["scale"] == {"y": "independent", "color": "shared"}
     recorded, estimated, weather = [layer for layer in spec["layer"] if "y" in layer["encoding"]]
-    assert all("x" not in layer["encoding"] for layer in (recorded, estimated, weather))
+    assert all("x" not in layer["encoding"] for layer in (recorded, estimated))
+    whisker, lower_cap, upper_cap, box, median, mean = weather["layer"]
+    assert whisker["encoding"]["y"]["field"] == "Minimum"
+    assert whisker["encoding"]["y2"]["field"] == "Maximum"
+    assert lower_cap["encoding"]["y"]["field"] == "Minimum"
+    assert upper_cap["encoding"]["y"]["field"] == "Maximum"
+    assert box["mark"]["type"] == "bar"
+    assert box["encoding"]["y"]["field"] == "Q1"
+    assert box["encoding"]["y2"]["field"] == "Q3"
+    assert median["encoding"]["y"]["field"] == "Median"
+    assert mean["mark"]["type"] == "point"
+    assert mean["mark"]["shape"] == "diamond"
+    assert mean["encoding"]["y"]["field"] == "Mean"
+    assert mean["encoding"]["y"]["aggregate"] == "min"
+    assert mean["encoding"]["y"]["type"] == "quantitative"
+    assert mean["encoding"]["y"]["axis"] == weather["encoding"]["y"]["axis"]
+    assert weather["resolve"]["scale"]["y"] == "shared"
+    assert weather["encoding"]["x"]["field"] == "Weather period"
     assert recorded["encoding"]["y"]["field"] == "Recorded check-ins"
     assert recorded["encoding"]["y"]["axis"]["orient"] == "left"
     assert "strokeDash" not in recorded["mark"]
@@ -671,8 +550,14 @@ def test_line_view_shares_one_date_plot_with_independent_count_rate_weather_axes
     assert "detail" not in estimated["encoding"]
     assert weather["encoding"]["y"]["field"] == "Weather value"
     assert weather["encoding"]["y"]["axis"]["orient"] == "right"
-    assert weather["encoding"]["y"]["axis"]["offset"] == 0
-    assert "detail" not in weather["encoding"]
+    assert weather["encoding"]["y"]["axis"].get("offset", 0) == 0
+    assert {field["field"] for field in weather["encoding"]["detail"]} >= {
+        "ZIP area",
+        "Weather source",
+        "Observed days",
+        "First report",
+        "Last report",
+    }
     assert "strokeDash" not in weather["encoding"]
     color = recorded["encoding"]["color"]
     assert estimated["encoding"]["color"] == weather["encoding"]["color"] == color
@@ -684,7 +569,7 @@ def test_line_view_shares_one_date_plot_with_independent_count_rate_weather_axes
     assert "baseline" not in charts[0].proto.spec.lower()
     captions = " ".join(caption.value for caption in app.caption)
     assert "heights are not directly comparable" in captions
-    assert "line connects available observed measurements" in captions
+    assert "Weather boxes summarize observations" in captions
     assert "Lines connect known points across missing dates" in captions
     assert "Gray bands mark dates without a forecast estimate" in captions
     assert "not an operational forecast" in captions
@@ -719,7 +604,7 @@ def test_forecast_only_line_view_has_rate_left_and_selected_weather_right(
     assert activity["encoding"]["y"]["axis"]["orient"] == "left"
     assert activity["encoding"]["y"]["axis"]["offset"] == 0
     assert weather["encoding"]["y"]["axis"]["orient"] == "right"
-    assert weather["encoding"]["y"]["axis"]["offset"] == 0
+    assert weather["encoding"]["y"]["axis"].get("offset", 0) == 0
     assert weather["encoding"]["y"]["title"] == weather_axis
     assert weather["encoding"]["y"]["scale"]["zero"] is (metric == "Precipitation")
 
@@ -742,6 +627,130 @@ def test_line_view_retains_recorded_days_when_no_selected_weather_is_available()
     assert activity["encoding"]["y"]["field"] == "Recorded check-ins"
     assert activity["encoding"]["y"]["axis"]["orient"] == "left"
     assert "No observed weather values" in app.caption[1].value
+
+
+def test_temperature_timeline_combines_highs_and_lows_without_duplicating_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import streamlit as st
+
+    captured: list[list[dict[str, Any]]] = []
+    original_chart = st.vega_lite_chart
+
+    def capture(data: Any, *args: Any, **kwargs: Any) -> Any:
+        captured.append(data)
+        return original_chart(data, *args, **kwargs)
+
+    monkeypatch.setattr(st, "vega_lite_chart", capture)
+    app = AppTest.from_function(_activity_weather_timeline_script)
+    app.session_state["forecast"] = _result()
+    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 7),)
+    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
+    historical = _historical_weather()
+    historical[1]["Mean daily low °C"] = -4.0
+    app.session_state["weather"] = historical
+    app.session_state["weather_metric"] = "Temperature"
+    app.run()
+
+    assert not app.exception
+    rows = captured[0]
+    assert len([row for row in rows if row["Activity source"] == "Recorded activity"]) == 2
+    assert len([row for row in rows if row["Activity source"] == "Forecast check-ins"]) == 2
+    weather = [row for row in rows if row["Activity source"] == "Observed weather"]
+    assert len(weather) == 2
+    assert [
+        tuple(
+            row[field]
+            for field in ("Minimum", "Q1", "Median", "Q3", "Maximum", "Mean", "Observed readings")
+        )
+        for row in weather
+    ] == [(-5, -4.5, -4, -2, 0, -3, 3), (3, 3, 7.5, 12, 12, 7.5, 4)]
+    assert {row["Series"] for row in weather} == {"Temperature"}
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    _assert_single_line_plot(spec)
+    (boxes,) = [layer for layer in spec["layer"] if "layer" in layer]
+    assert boxes["encoding"]["y"]["axis"]["orient"] == "right"
+    assert boxes["encoding"]["y"]["title"] == "Weather °C"
+    colors = boxes["encoding"]["color"]["scale"]
+    assert colors["domain"][-1] == "Temperature"
+    assert colors["range"][-1] == "#e67e22"
+
+
+def test_hourly_forecast_weather_boxes_keep_exact_daily_model_inputs_and_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import streamlit as st
+
+    captured: list[list[dict[str, Any]]] = []
+    original_chart = st.vega_lite_chart
+
+    def capture(data: Any, *args: Any, **kwargs: Any) -> Any:
+        captured.append(data)
+        return original_chart(data, *args, **kwargs)
+
+    monkeypatch.setattr(st, "vega_lite_chart", capture)
+    hourly = [
+        {
+            "Date": "2022-01-18",
+            "Observation time": f"2022-01-18T{hour:02}:54:00-05:00",
+            "Weather value": value,
+            "Series": "Temperature",
+            "Observation frequency": "Hourly",
+            "Weather metric": "Temperature (°C)",
+            "Weather source": "NOAA LCDv2",
+            "Weather station": "Philadelphia airport (USW00013739)",
+            "ZIP area": "Old City",
+        }
+        for hour, value in ((0, -4), (1, 2), (2, 11))
+    ]
+    forecast = _result()
+    app = AppTest.from_function(_activity_weather_timeline_script)
+    app.session_state["forecast"] = forecast
+    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 7),)
+    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
+    app.session_state["weather"] = _historical_weather()
+    app.session_state["weather_metric"] = "Temperature"
+    app.session_state["hourly_weather_rows"] = hourly
+    app.run()
+    assert not app.exception
+    rows = captured[0]
+    recorded = [row for row in rows if row["Activity source"] == "Recorded activity"]
+    assert [row["Recorded check-ins"] for row in recorded] == [7, 0]
+    estimated = [row for row in rows if row["Activity source"] == "Forecast check-ins"]
+    assert [row["Forecast check-ins"] for row in estimated] == [0.1, 0.3]
+    assert [(row["High °C"], row["Low °C"], row["Rain mm"]) for row in estimated] == [
+        (12, 3, 1),
+        (12, 3, 1),
+    ]
+    weather = [row for row in rows if row["Activity source"] == "Observed weather"]
+    assert len(weather) == 1
+    assert tuple(
+        weather[0][field] for field in ("Minimum", "Q1", "Median", "Q3", "Maximum", "Mean")
+    ) == (
+        -4,
+        -1,
+        2,
+        6.5,
+        11,
+        3,
+    )
+    assert {row["Observation frequency"] for row in weather} == {"Hourly"}
+    assert {row["Observed readings"] for row in weather} == {3}
+    assert all("USW00013739" in row["Weather station"] for row in weather)
+    assert forecast == _result()
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    _assert_single_line_plot(spec)
+    app.session_state["weather_metric"] = "Precipitation"
+    app.run()
+    assert not app.exception
+    rain = [row for row in captured[-1] if row["Activity source"] == "Observed weather"]
+    assert rain
+    assert {row["Observation frequency"] for row in rain} == {"Daily summaries"}
+    assert all(row["Maximum"] <= 2 for row in rain)
+    assert (
+        json.loads(app.get("vega_lite_chart")[0].proto.spec)["layer"][-1]["encoding"]["y"]["title"]
+        == "Rain mm/day"
+    )
 
 
 def test_verified_cohort_normalization_uses_filtered_records_and_exact_denominator() -> None:
@@ -887,58 +896,24 @@ def test_normalized_line_connects_recorded_anchor_and_known_estimates_without_fa
     assert activity["encoding"]["y"]["axis"]["orient"] == "left"
     assert weather["encoding"]["y"]["field"] == "Weather value"
     assert weather["encoding"]["y"]["axis"]["orient"] == "right"
-    assert weather["encoding"]["y"]["axis"]["offset"] == 0
+    assert weather["encoding"]["y"]["axis"].get("offset", 0) == 0
     assert activity["encoding"]["strokeDash"]["scale"] == {
         "domain": ["Recorded activity", "Forecast check-ins"],
         "range": [[], [6, 4]],
     }
     assert "detail" not in activity["encoding"]
-    assert "detail" not in weather["encoding"]
+    assert {field["field"] for field in weather["encoding"]["detail"]} >= {
+        "ZIP area",
+        "Weather source",
+        "Observed days",
+        "First report",
+        "Last report",
+    }
     captions = " ".join(caption.value for caption in app.caption)
     assert "same verified historical cohort of 50 businesses" in captions
     assert "Recorded anchor" in captions
     assert "not a forecast estimate" in captions
     assert "Gray bands" in captions
-
-
-def test_normalized_scatter_uses_one_activity_axis_without_an_anchor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import streamlit as st
-
-    captured: list[list[dict[str, Any]]] = []
-    original_chart = st.vega_lite_chart
-
-    def capture_chart(data: Any, *args: Any, **kwargs: Any) -> Any:
-        captured.append(data)
-        return original_chart(data, *args, **kwargs)
-
-    monkeypatch.setattr(st, "vega_lite_chart", capture_chart)
-    app = AppTest.from_function(_activity_weather_script)
-    app.session_state["forecast"] = _result()
-    app.session_state["records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 999),)
-    app.session_state["cohort_records"] = (ActivityRecord(1, date(2022, 1, 18), 12, 25),)
-    app.session_state["cohort_businesses"] = 50
-    app.session_state["covered"] = (date(2022, 1, 18), date(2022, 1, 19))
-    app.session_state["weather"] = _historical_weather()
-    app.session_state["weather_metric"] = "Daily high temperature"
-    app.run()
-
-    assert not app.exception
-    rows = captured[0]
-    assert [row["Activity check-ins"] for row in rows] == [50.0, 0.1, 0.3]
-    assert rows[0]["Recorded cohort check-ins"] == 25
-    assert all(row["Historical cohort businesses"] == 50 for row in rows)
-    assert not any(row["Activity source"] == "Recorded anchor" for row in rows)
-    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
-    _assert_single_scatter_plot(spec)
-    (activity,) = spec["layer"]
-    assert activity["encoding"]["y"]["field"] == "Activity check-ins"
-    assert activity["encoding"]["y"]["axis"]["orient"] == "left"
-    assert spec["resolve"]["scale"]["y"] == "shared"
-    captions = " ".join(caption.value for caption in app.caption)
-    assert "same verified historical cohort of 50 businesses" in captions
-    assert "heights are not directly comparable" not in captions
 
 
 def test_export_has_actual_estimated_bounds_counts_and_explicit_rate_unit() -> None:
