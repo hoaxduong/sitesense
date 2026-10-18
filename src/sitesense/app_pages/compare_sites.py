@@ -1,3 +1,3 @@
-from sitesense.ui import render_comparison
+from sitesense.business_comparison import render_business_comparison
 
-render_comparison()
+render_business_comparison()

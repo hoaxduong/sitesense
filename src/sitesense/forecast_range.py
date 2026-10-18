@@ -102,6 +102,8 @@ def predict_range(
             reason,
         )
 
+    if filters.source_category is not None:
+        return empty_result("The broad-sector weather model does not estimate source categories.")
     if not uncovered_days:
         return empty_result(None)
     if uncovered_days > max_days:

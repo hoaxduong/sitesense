@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from statistics import correlation
 from typing import Any
 
@@ -15,6 +15,8 @@ from streamlit.testing.v1 import AppTest
 from sitesense import app as app_module
 from sitesense import business_weather_views as views
 from sitesense import hourly_weather, repository
+from sitesense.business_activity import ProjectionResult
+from sitesense.business_forecast import BusinessGroup, BusinessProjection
 from sitesense.business_weather import (
     BusinessDay,
     BusinessWeatherDay,
@@ -179,12 +181,13 @@ def _weather_app(
     filters: Filters = FILTERS,
     revision: str = "weather-import-one",
     coverage: DateCoverage = COVERAGE,
+    projection: ProjectionResult | None = None,
 ) -> AppTest:
     app = AppTest.from_string(
         """import streamlit as st
 from sitesense.business_weather_views import render_business_weather
 render_business_weather(st.session_state['context'], st.session_state['business'],
-                        st.session_state['filters'])
+                        st.session_state['filters'], st.session_state['projection'])
 """,
         default_timeout=10,
     )
@@ -192,6 +195,7 @@ render_business_weather(st.session_state['context'], st.session_state['business'
     app.session_state["context"] = ScreenContext(filters, catalog, (), (), revision)
     app.session_state["business"] = business
     app.session_state["filters"] = filters
+    app.session_state["projection"] = projection
     return app
 
 
@@ -264,12 +268,24 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     assert weather_layer["encoding"]["color"]["field"] == "Series"
     assert {"field": "Series", "type": "nominal"} in weather_layer["encoding"]["detail"]
     assert activity_layer["mark"]["type"] == "line"
-    assert activity_layer["encoding"]["x"]["field"] == "Date"
+    assert activity_layer["encoding"]["x"]["field"] == "Period midpoint"
     assert activity_layer["encoding"]["x"]["type"] == "temporal"
     assert activity_layer["encoding"]["y"]["field"] == "Recorded check-ins"
     assert activity_layer["encoding"]["y"]["axis"]["orient"] == "left"
+    assert activity_layer["encoding"]["y"]["axis"]["title"] == "Recorded check-ins"
+    assert activity_layer["encoding"]["y"]["axis"]["format"] == ",.0f"
+    assert activity_layer["encoding"]["x"]["title"] == "Week"
+    assert activity_layer["mark"]["interpolate"] == "linear"
+    assert (
+        next(
+            field
+            for field in activity_layer["encoding"]["tooltip"]
+            if field["field"] == "Recorded check-ins"
+        )["format"]
+        == ",.0f"
+    )
     activity = _activity_rows(chart_inputs["timeline"][-1])
-    assert activity["Recorded check-ins"].tolist() == [1, 0, 3]
+    assert activity["Recorded check-ins"].tolist() == [4]
     weather_box = _weather_rows(chart_inputs["timeline"][-1])
     assert len(weather_box) == 1
     assert set(weather_box["Series"]) == {"Temperature"}
@@ -284,11 +300,19 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
         11,
         5,
     ]
-    assert activity["Date"].tolist() == [
-        "2020-01-02",
-        "2020-01-03",
-        "2020-01-04",
-    ]
+    assert activity["Period"].tolist() == ["Week of 2019-12-30"]
+    assert activity["Period start"].tolist() == ["2020-01-02"]
+    assert activity["Period end"].tolist() == ["2020-01-04"]
+    assert activity["Covered calendar days"].tolist() == [3]
+    assert activity["Period midpoint"].tolist() == weather_box["Weather period"].tolist()
+    activity_tooltip = {field["field"] for field in activity_layer["encoding"]["tooltip"]}
+    assert activity_tooltip == {
+        "Period",
+        "Period start",
+        "Period end",
+        "Covered calendar days",
+        "Recorded check-ins",
+    }
     assert weather_box["Weather source"].str.contains("ACIS").all()
     bands = app.dataframe[1].value
     bands = bands[bands["Weather measure"] == "Daily high temperature (°C)"]
@@ -321,7 +345,7 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
         1,
         2,
     ]
-    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [1, 0, 3]
+    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [4]
     table = app.dataframe[0].value
     assert table["Precipitation (mm)"].iloc[0] == 0
     assert table["Precipitation (mm)"].isna().sum() == 1
@@ -349,7 +373,7 @@ def test_all_zero_activity_still_renders_line_and_weather_distribution(
     metrics = {metric.label: metric.value for metric in app.metric}
     assert metrics["High paired days"] == "3"
     assert metrics["High Pearson r (unadjusted)"] == "Unavailable"
-    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [0, 0, 0]
+    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [0]
     high = _weather_rows(chart_inputs["timeline"][-1], "Daily high temperature (°C)")
     assert len(high) == 1
     assert high[["Minimum", "Q1", "Median", "Q3", "Maximum", "Mean", "Observed readings"]].iloc[
@@ -378,10 +402,97 @@ def test_all_zero_activity_still_renders_line_and_weather_distribution(
     assert len(populated) == 1
     assert populated["Paired days"].tolist() == [3]
     assert populated["Zero-activity days"].tolist() == [3]
-    assert populated[["Median check-ins/day", "Q1", "Q3"]].iloc[0].tolist() == [0, 0, 0]
+    assert populated[["Median recorded check-ins", "Q1", "Q3"]].iloc[0].tolist() == [0, 0, 0]
     empty = bands[bands["Paired days"] == 0]
-    assert empty[["Median check-ins/day", "Q1", "Q3"]].isna().all().all()
+    assert empty[["Median recorded check-ins", "Q1", "Q3"]].isna().all().all()
     assert any("band" in warning.value.lower() for warning in app.warning)
+
+
+def test_monthly_activity_matches_weather_bins_and_keeps_activity_without_weather(
+    monkeypatch: pytest.MonkeyPatch, chart_inputs: dict[str, list[pd.DataFrame]]
+) -> None:
+    start, end = date(2020, 1, 20), date(2020, 4, 20)
+    calls: list[Filters] = []
+
+    def daily(filters: Filters, business_id: str) -> tuple[BusinessDay, ...]:
+        calls.append(filters)
+        return tuple(
+            BusinessDay("a", date.fromisoformat(day), count)
+            for day, count in (
+                ("2020-01-19", 999),
+                ("2020-01-20", 2),
+                ("2020-01-31", 3),
+                ("2020-02-01", 5),
+                ("2020-02-29", 7),
+                ("2020-03-15", 11),
+                ("2020-04-20", 13),
+                ("2020-04-21", 999),
+            )
+        )
+
+    monkeypatch.setattr(repository, "load_business_daily", daily)
+    monkeypatch.setattr(
+        views,
+        "load_daily_station_weather",
+        lambda cells, start, end: {
+            STATION.weather_cell_id: {
+                date(2020, 1, 31): {"tmax": 10.0, "tmin": -5.0},
+                date(2020, 4, 1): {"tmax": 30.0, "tmin": 15.0},
+            }
+        },
+    )
+    requested = replace(FILTERS, start_date=date(2020, 1, 1), end_date=date(2020, 5, 1))
+    app = _weather_app(filters=requested, coverage=DateCoverage(start, end)).run()
+
+    assert not app.exception
+    assert calls == [replace(FILTERS, start_date=start, end_date=end)]
+    frame = chart_inputs["timeline"][-1]
+    activity = _activity_rows(frame).set_index("Period")
+    assert activity["Recorded check-ins"].to_dict() == {
+        "January 2020": 5,
+        "February 2020": 12,
+        "March 2020": 11,
+        "April 2020": 13,
+    }
+    assert activity["Covered calendar days"].tolist() == [12, 29, 31, 20]
+    assert activity["Period start"].iloc[0] == "2020-01-20"
+    assert activity["Period end"].iloc[-1] == "2020-04-20"
+    boxes = _weather_rows(frame).set_index("Period")
+    assert activity["Period midpoint"].to_dict() == boxes["Weather period"].to_dict()
+    assert boxes.loc["February 2020", "Observed readings"] == 0
+    assert boxes.loc["March 2020", "Observed readings"] == 0
+    assert boxes.loc["January 2020", "First report"] == "2020-01-31"
+    assert activity.loc["January 2020", "Period midpoint"] != "2020-01-31T00:00:00+00:00"
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    for layer in spec["layer"][0]["layer"]:
+        assert {field["field"] for field in layer["encoding"]["tooltip"]} >= {
+            "Period",
+            "Period start",
+            "Period end",
+            "Covered calendar days",
+        }
+    assert any("totaled for each calendar month" in caption.value for caption in app.caption)
+    month_encoding = spec["layer"][1]["encoding"]
+    assert month_encoding["x"]["title"] == "Month"
+    assert month_encoding["x"]["axis"]["format"] == "%b %Y"
+    tick_values = month_encoding["x"]["axis"]["values"]
+    assert all(value["utc"] for value in tick_values)
+    assert [
+        datetime(
+            value["year"],
+            value["month"],
+            value["date"],
+            value["hours"],
+            value["minutes"],
+            tzinfo=UTC,
+        ).isoformat()
+        for value in tick_values
+    ] == activity["Period midpoint"].tolist()
+    assert month_encoding["x"]["axis"] == spec["layer"][0]["encoding"]["x"]["axis"]
+    daily_table = app.dataframe[0].value
+    assert len(daily_table) == 92
+    assert daily_table["Recorded check-ins"].sum() == 41
+    assert {metric.label: metric.value for metric in app.metric}["Calendar days"] == "92"
 
 
 def test_low_temperature_remains_visible_when_all_high_reports_are_missing(
@@ -423,7 +534,7 @@ def test_low_temperature_remains_visible_when_all_high_reports_are_missing(
         0,
         3,
     ]
-    assert _activity_rows(frame)["Recorded check-ins"].tolist() == [1, 0, 3]
+    assert _activity_rows(frame)["Recorded check-ins"].tolist() == [4]
     assert not any("No accepted observations" in message.value for message in app.info)
 
 
@@ -459,7 +570,7 @@ def test_boxplots_keep_daily_distribution_statistics_and_correlation_uses_daily_
     assert metrics["High Pearson r (unadjusted)"] == f"{correlation(temperatures, activity):.3f}"
     assert metrics["High Pearson r (unadjusted)"] != "1.000"  # Two band medians give r=1.
     frame = chart_inputs["timeline"][-1]
-    assert _activity_rows(frame)["Recorded check-ins"].tolist() == list(activity)
+    assert _activity_rows(frame)["Recorded check-ins"].tolist() == [13, 33]
     boxes = _weather_rows(frame)
     assert len(boxes) == 2
     assert boxes["Observed readings"].tolist() == [4, 2]
@@ -472,7 +583,7 @@ def test_boxplots_keep_daily_distribution_statistics_and_correlation_uses_daily_
     populated = bands[bands["Paired days"] > 0]
     assert populated["Paired days"].tolist() == [3, 3]
     assert populated["Zero-activity days"].tolist() == [1, 0]
-    assert populated["Median check-ins/day"].tolist() == [1, 3]
+    assert populated["Median recorded check-ins"].tolist() == [1, 3]
     assert populated["Q1"].tolist() == [0.5, 2.5]
     assert populated["Q3"].tolist() == [5.5, 16.5]
 
@@ -511,9 +622,10 @@ def test_hourly_business_boxes_leave_daily_association_inputs_and_activity_uncha
     app = _weather_app().run()
     assert not app.exception
     frame = chart_inputs["timeline"][-1]
-    assert _activity_rows(frame)["Recorded check-ins"].tolist() == [1, 0, 3]
+    assert _activity_rows(frame)["Recorded check-ins"].tolist() == [4]
     observed = _weather_rows(frame)
     assert len(observed) == 1
+    assert observed["Weather period"].tolist() == _activity_rows(frame)["Period midpoint"].tolist()
     assert observed[["Minimum", "Q1", "Median", "Q3", "Maximum", "Mean"]].iloc[
         0
     ].tolist() == pytest.approx([-4, 1, 6, 10, 14, 16 / 3])
@@ -537,7 +649,7 @@ def test_hourly_business_boxes_leave_daily_association_inputs_and_activity_uncha
         0
     ].tolist() == pytest.approx([0, 0.5, 1, 1.5, 2, 1, 2])
     assert set(rain["Observation frequency"]) == {"Daily summaries"}
-    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [1, 0, 3]
+    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [4]
     spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
     assert "mm/day" in spec["layer"][0]["encoding"]["y"]["title"]
 
@@ -561,7 +673,7 @@ def test_activity_remains_visible_when_weather_variable_has_no_paired_observatio
     app.selectbox(key="business_weather_metric").set_value("Precipitation (mm)").run()
     assert not app.exception
     assert len(app.get("vega_lite_chart")) == 1
-    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [1, 0, 0]
+    assert _activity_rows(chart_inputs["timeline"][-1])["Recorded check-ins"].tolist() == [1]
     assert _weather_rows(chart_inputs["timeline"][-1])["Weather value"].isna().all()
     assert any("No accepted observations" in message.value for message in app.info)
     app.selectbox(key="business_weather_metric").set_value("Temperature (°C)").run()
@@ -629,3 +741,139 @@ def test_revision_guard_prevents_mixed_import_charts(monkeypatch: pytest.MonkeyP
     assert not app.metric
     assert not app.dataframe
     assert not app.get("vega_lite_chart")
+
+
+def _tail_projection(start: date, end: date) -> ProjectionResult:
+    group = BusinessGroup(
+        "a",
+        BUSINESS.name,
+        "Philadelphia",
+        "PA",
+        "Restaurants",
+        ("Italian",),
+        40.0,
+        -75.0,
+        100,
+        20,
+        2.0,
+        (2.0,) * 84,
+    )
+    days = (end - start).days + 1
+    return ProjectionResult((start, end), (BusinessProjection(group, days, 2, days * 2),))
+
+
+def test_shared_weather_timeline_keeps_actual_pairs_and_projected_tail_separate(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, list[pd.DataFrame]],
+) -> None:
+    requested = replace(FILTERS, start_date=date(2020, 1, 1), end_date=date(2020, 1, 8))
+    weather_calls: list[tuple[date, date]] = []
+    monkeypatch.setattr(
+        repository,
+        "load_business_daily",
+        lambda *args: (
+            BusinessDay("a", START, 1),
+            BusinessDay("a", END, 3),
+        ),
+    )
+
+    def weather(cells: tuple[WeatherCell, ...], start: date, end: date) -> dict:
+        weather_calls.append((start, end))
+        return {
+            STATION.weather_cell_id: {
+                date(2020, 1, 1): {"tmax": 99.0},
+                START: {"tmax": 10.0},
+                END: {"tmax": 30.0},
+                date(2020, 1, 7): {"tmax": 40.0},
+            }
+        }
+
+    monkeypatch.setattr(views, "load_daily_station_weather", weather)
+    page = _weather_app(
+        filters=requested,
+        projection=_tail_projection(
+            date(2020, 1, 5),
+            date(2020, 1, 8),
+        ),
+    ).run()
+    assert not page.exception
+    assert weather_calls == [(requested.start_date, requested.end_date)]
+    frame = chart_inputs["timeline"][-1]
+    actual = frame[frame["Axis"] == "activity"]
+    projected = frame[frame["Axis"] == "projection"]
+    assert actual["Recorded check-ins"].tolist() == [4]
+    assert actual["Covered calendar days"].tolist() == [3]
+    assert projected["Projected check-ins"].tolist() == [2, 6]
+    assert projected["Covered calendar days"].tolist() == [1, 3]
+    assert actual["Period midpoint"].iloc[0] == projected["Period midpoint"].iloc[0]
+    metrics = {metric.label: metric.value for metric in page.metric}
+    assert metrics["Calendar days"] == "3"
+    assert metrics["High paired days"] == "2"
+    boxes = _weather_rows(frame)
+    assert boxes["Observed readings"].tolist() == [3, 1]
+    spec = json.loads(page.get("vega_lite_chart")[0].proto.spec)
+    assert spec["layer"][1]["resolve"]["scale"]["y"] == "shared"
+    assert spec["layer"][1]["layer"][1]["mark"]["strokeDash"] == [6, 4]
+    activity_axis = spec["layer"][1]["layer"][0]["encoding"]["y"]["axis"]
+    assert activity_axis["orient"] == "left"
+    assert spec["layer"][1]["layer"][1]["encoding"]["y"]["axis"] == activity_axis
+    assert page.dataframe[0].value["Recorded check-ins"].tolist() == [1, 0, 3]
+
+
+@pytest.mark.parametrize("missing_station", [False, True])
+def test_future_projection_remains_visible_without_weather_and_without_actual_zeros(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, list[pd.DataFrame]],
+    missing_station: bool,
+) -> None:
+    requested = replace(FILTERS, start_date=date(2020, 1, 5), end_date=date(2020, 1, 8))
+
+    def no_activity(*args: Any) -> None:
+        pytest.fail("Projected dates must not query recorded activity")
+
+    def failed_weather(*args: Any) -> None:
+        raise psycopg.OperationalError("credentials must remain private")
+
+    monkeypatch.setattr(repository, "load_business_daily", no_activity)
+    monkeypatch.setattr(views, "load_daily_station_weather", failed_weather)
+    business = replace(BUSINESS, weather_cell_id=None) if missing_station else BUSINESS
+    page = _weather_app(
+        business=business,
+        filters=requested,
+        projection=_tail_projection(
+            requested.start_date,
+            requested.end_date,
+        ),
+    ).run()
+    assert not page.exception
+    assert not page.metric
+    assert not page.dataframe
+    frame = chart_inputs["timeline"][-1]
+    assert frame[frame["Axis"] == "activity"].empty
+    assert frame[frame["Axis"] == "projection"]["Projected check-ins"].tolist() == [2, 6]
+    assert frame[frame["Axis"] == "weather"].empty
+    assert not any("credentials" in value.value for value in page.warning)
+
+
+def test_last_representable_projection_day_never_creates_recorded_zero_or_overflows(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, list[pd.DataFrame]],
+) -> None:
+    requested = replace(FILTERS, start_date=date.max, end_date=date.max)
+
+    def no_activity(*args: Any) -> None:
+        pytest.fail("A future-only day must not query recorded activity")
+
+    monkeypatch.setattr(repository, "load_business_daily", no_activity)
+    page = _weather_app(
+        business=replace(BUSINESS, weather_cell_id=None),
+        filters=requested,
+        projection=_tail_projection(date.max, date.max),
+    ).run()
+    assert not page.exception
+    frame = chart_inputs["timeline"][-1]
+    assert frame[frame["Axis"] == "activity"].empty
+    projection = frame[frame["Axis"] == "projection"]
+    assert projection["Projected check-ins"].tolist() == [2]
+    assert projection["Period start"].tolist() == [date.max.isoformat()]
+    assert projection["Covered calendar days"].tolist() == [1]

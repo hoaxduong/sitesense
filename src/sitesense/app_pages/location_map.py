@@ -1,3 +1,5 @@
-from sitesense.location_map import render_location_map
+import streamlit as st
 
-render_location_map()
+from sitesense.business_map import render
+
+render(st.session_state["screen_context"])

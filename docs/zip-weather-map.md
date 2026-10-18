@@ -1,8 +1,17 @@
 # ZIP weather map
 
+**Archived workspace.** The primary application now displays
+[individual businesses](business-location-workspace.md). This document describes
+the retained area-level research components, not the current main-page workflow.
+
 Location map fills eligible ZIP areas with representative observations for
 the screen's selected city, category, and recorded dates. Users choose mean daily maximum
 temperature, mean daily minimum temperature, or precipitation over valid reports.
+
+The shared Source category filter restricts listed businesses, activity and
+representative station weights to exact niche members. Location map also has a
+separate [future niche calendar planning mode](niche-planning.md), with its own
+day/month dates and explicit historical-pattern projection units.
 
 Each value is the mean of usable mapped-station summaries, weighted by the number
 of listed category businesses linked to each station in the ZIP. Temperature uses

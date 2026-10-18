@@ -194,6 +194,9 @@ def load_reference(
     An absent, moved, or recategorized member makes its area unavailable. It is
     never dropped from the denominator or replaced with a snapshot business.
     """
+    if filters.source_category is not None:
+        reason = "Broad-sector model cohorts do not represent a source category."
+        return CohortReference(tuple(CohortArea(area.id, (), 0, reason) for area in areas), reason)
     try:
         _, members, cohort_areas = _verified_files(
             directory, directory / "cohort", "parent_manifest.json"

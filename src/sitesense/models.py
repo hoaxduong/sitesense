@@ -138,6 +138,7 @@ class Filters:
     start_date: date
     end_date: date
     radius_km: float = 1.0
+    source_category: str | None = None
 
     @property
     def category_label(self) -> str:

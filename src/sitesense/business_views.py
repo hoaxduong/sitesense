@@ -51,41 +51,35 @@ def _comparison_csv(table: pd.DataFrame, filters: Filters, source: str = "") -> 
 
 def _category_comparison(summaries: tuple[analysis.BusinessSummary, ...], filters: Filters) -> None:
     st.subheader("Top source categories")
-    st.caption(
-        f"All source categories within {filters.category_label} in {filters.city}, "
-        "using the effective dates. This ranking includes the whole broad category, "
-        "so you can discover alternatives to your selected source category."
-    )
+    st.caption(f"Across {filters.category_label}, including alternatives to the selected niche.")
     tags = analysis.subcategory_groups(filters.category, tuple(row.business for row in summaries))[
         "Source categories"
     ]
     if not tags:
         st.info("No additional source categories are available in this snapshot.")
         return
-    if st.session_state.get("business_category_rank") not in analysis.CATEGORY_RANK_METRICS:
-        st.session_state["business_category_rank"] = analysis.CATEGORY_RANK_METRICS[0]
-    metric = st.selectbox(
-        "Rank source categories by",
-        analysis.CATEGORY_RANK_METRICS,
-        key="business_category_rank",
-        persist_state="session",
-    )
-    minimum = st.number_input(
-        "Minimum businesses per source category",
-        min_value=1,
-        value=1,
-        step=1,
-        key="business_category_minimum",
-        persist_state="session",
-        help=(
-            "Raise this to inspect rankings beyond very small groups. "
-            "This is not a significance test."
-        ),
-    )
-    limit = st.selectbox(
-        "Categories shown", (10, 20, 50), key="business_category_limit", persist_state="session"
-    )
-    all_ranked = analysis.rank_categories(summaries, tags, metric)
+    with st.container(horizontal=True, vertical_alignment="bottom", gap="small"):
+        minimum = st.number_input(
+            "Minimum businesses",
+            min_value=1,
+            value=1,
+            step=1,
+            key="business_category_minimum",
+            persist_state="session",
+            help=(
+                "Minimum listed businesses per source category. Raise this to inspect "
+                "rankings beyond very small groups; this is not a significance test."
+            ),
+            width=200,
+        )
+        limit = st.selectbox(
+            "Categories shown",
+            (10, 20, 50),
+            key="business_category_limit",
+            persist_state="session",
+            width=160,
+        )
+    all_ranked = analysis.rank_categories(summaries, tags)
     ranked = tuple(row for row in all_ranked if row.business_count >= minimum)
     if not ranked:
         st.info(
@@ -99,11 +93,8 @@ def _category_comparison(summaries: tuple[analysis.BusinessSummary, ...], filter
                 "Rank": index,
                 "Source category": row.category,
                 "Recorded check-ins": row.checkin_count,
-                "Check-ins / day": round(row.daily_checkins, 3),
                 "Businesses": row.business_count,
                 "With check-ins": row.active_business_count,
-                "Check-ins / business / day": round(row.daily_checkins_per_business, 3),
-                "Median / business / day": round(row.median_daily_checkins, 3),
                 "Largest business share (%)": round(row.top_business_share * 100, 1)
                 if row.top_business_share is not None
                 else None,
@@ -120,21 +111,17 @@ def _category_comparison(summaries: tuple[analysis.BusinessSummary, ...], filter
     st.dataframe(
         displayed, hide_index=True, alt="Ranked source categories with activity and sample sizes"
     )
-    chart_metric = "Businesses" if metric == "Listed businesses" else metric
     st.bar_chart(
         displayed,
         x="Source category",
-        y=chart_metric,
+        y="Recorded check-ins",
         horizontal=True,
         sort=False,
-        alt=f"Top source categories ranked by {metric}",
+        alt="Top source categories ranked by recorded check-ins",
     )
     st.caption(
         f"Showing {len(displayed):,} of {len(ranked):,} eligible source categories "
-        f"({len(all_ranked):,} before the minimum-business filter). "
-        "Groups use the exact source labels and can share businesses; totals are not additive. "
-        "Per-business means and medians include zero-activity listings. A high mean in a small "
-        "group can be driven by one business; read its sample size and largest-business share."
+        f"({len(all_ranked):,} before the minimum-business filter)."
     )
     st.download_button(
         "Download source category rankings",
@@ -146,16 +133,14 @@ def _category_comparison(summaries: tuple[analysis.BusinessSummary, ...], filter
 
 def _business_label(row: analysis.BusinessSummary) -> str:
     business = row.business
-    return f"{business.name} · {business.postal_code or 'No ZIP'} · {business.business_id[-6:]}"
+    return f"{business.name} · {business.business_id[-6:]}"
 
 
 def _business_row(row: analysis.BusinessSummary) -> dict[str, object]:
     business = row.business
     return {
         "Business": business.name,
-        "ZIP": business.postal_code,
         "Recorded check-ins": row.checkin_count,
-        "Check-ins / day": round(row.daily_checkins, 3),
         "Days with check-ins": row.active_days,
         "Weekend share (%)": round(row.weekend_share * 100, 1)
         if row.weekend_share is not None
@@ -176,7 +161,7 @@ def _selected_business_comparison(
     source: str,
 ) -> None:
     by_id = {row.business.business_id: row for row in peers}
-    scope = (filters.city, filters.category, source, st.session_state["business_zip"])
+    scope = (filters.city, filters.category, source)
     if st.session_state.get("business_peer_scope") != scope:
         st.session_state["business_picks"] = [row.business.business_id for row in peers[:2]]
         st.session_state["business_peer_scope"] = scope
@@ -213,7 +198,7 @@ def _selected_business_comparison(
             {
                 "Month": row.month_start,
                 "Business": _business_label(by_id[row.business_id]),
-                "Recorded check-ins / day": row.daily_checkins,
+                "Recorded check-ins": row.checkin_count,
             }
             for row in rates
         ]
@@ -221,15 +206,9 @@ def _selected_business_comparison(
     st.line_chart(
         chart,
         x="Month",
-        y="Recorded check-ins / day",
+        y="Recorded check-ins",
         color="Business",
-        alt="Monthly recorded activity rates for the selected competitors",
-    )
-    st.caption(
-        "Each month's daily average uses calendar days inside the effective date range, "
-        "including partial months and days with zero activity. "
-        "Historical opening dates are unavailable; "
-        "zero check-ins do not establish that a business was open or closed."
+        alt="Monthly recorded check-ins for the selected competitors",
     )
     st.download_button(
         "Download business comparison",
@@ -246,73 +225,43 @@ def _business_comparison(
     source: str,
 ) -> None:
     st.subheader("Top businesses and competitors")
-    st.caption(f"Industry: {filters.category_label} → {source} · {filters.city}, {filters.state}.")
     if not summaries:
         st.info("No businesses match this source category.")
         return
-    if st.session_state.get("business_rank") not in analysis.BUSINESS_RANK_METRICS:
-        st.session_state["business_rank"] = analysis.BUSINESS_RANK_METRICS[0]
-    metric = st.selectbox(
-        "Rank businesses by",
-        analysis.BUSINESS_RANK_METRICS,
-        key="business_rank",
-        persist_state="session",
-    )
-    zips = sorted({row.business.postal_code for row in summaries if row.business.postal_code})
-    if st.session_state.get("business_zip") not in ["All ZIPs", *zips]:
-        st.session_state["business_zip"] = "All ZIPs"
-    postal_code = st.selectbox(
-        "ZIP within this group",
-        ["All ZIPs", *zips],
-        key="business_zip",
-        persist_state="session",
-    )
-    peers = analysis.rank_businesses(
-        (
-            row
-            for row in summaries
-            if postal_code == "All ZIPs" or row.business.postal_code == postal_code
-        ),
-        metric,
-    )
+    peers = analysis.rank_businesses(summaries)
     if not peers:
-        st.info("No businesses match this industry and ZIP.")
+        st.info("No businesses match this source category.")
         return
     st.caption(
-        f"{len(peers):,} businesses · median {median(row.daily_checkins for row in peers):.3f} "
-        "recorded check-ins / business / day. "
-        "Search narrows the list without changing this benchmark."
+        f"{len(peers):,} businesses · median {median(row.checkin_count for row in peers):g} "
+        "recorded check-ins per business."
     )
     if len(peers) < 5:
         st.warning("This group has fewer than five businesses. Comparisons are descriptive.")
     query = (
         st.text_input(
-            "Find a business by name or ZIP",
+            "Find a business by name",
             key="business_search",
             persist_state="session",
+            help="Search narrows the list without changing the industry benchmark.",
+            width=360,
         )
         .strip()
         .casefold()
     )
-    matches = [
-        row
-        for row in peers
-        if not query or query in row.business.name.casefold() or query in row.business.postal_code
-    ]
+    matches = [row for row in peers if not query or query in row.business.name.casefold()]
     ranks = {row.business.business_id: index for index, row in enumerate(peers, 1)}
     st.caption(
-        f"Showing {min(len(matches), 100):,} of {len(matches):,} matches, ordered by {metric}."
+        f"Showing {min(len(matches), 100):,} of {len(matches):,} matches, "
+        "ordered by Recorded check-ins."
     )
     table = pd.DataFrame(
         [{"Rank": ranks[row.business.business_id], **_business_row(row)} for row in matches[:100]]
     )
     st.dataframe(
-        table, hide_index=True, alt=f"Top businesses in the selected industry ranked by {metric}"
-    )
-    st.caption(
-        "Ratings, reviews, operating status and source categories describe the archive snapshot. "
-        "Check-ins belong to the whole listing; activity at a hotel cannot be attributed "
-        "specifically to its spa or restaurant."
+        table,
+        hide_index=True,
+        alt="Top businesses in the selected industry ranked by recorded check-ins",
     )
     _selected_business_comparison(peers, matches, filters, context.import_revision, source)
     by_id = {row.business.business_id: row for row in peers}
@@ -334,12 +283,9 @@ def _business_comparison(
         key="business_focus",
         persist_state="session",
         format_func=lambda value: _business_label(by_id[value]),
+        width=500,
     )
     business = by_id[focused_id].business
-    st.caption(
-        f"Investigating: {business.name} · "
-        f"{business.city}, {business.state} {business.postal_code}."
-    )
     from sitesense.business_weather_views import render_business_weather
 
     render_business_weather(context, business, filters)
@@ -351,12 +297,6 @@ def render_business_analysis() -> None:
     source = str(st.session_state.get("business_source_category", "All source categories"))
     start = max(filters.start_date, catalog.coverage.start_date)
     end = min(filters.end_date, catalog.coverage.end_date)
-    st.caption(
-        "Choose Metro area → Business category → Source category and dates in the sidebar. "
-        "Discover leading source categories, research competitors, then investigate a "
-        "business's weather and activity. "
-        "Check-ins are recorded Yelp activity, not revenue or customers."
-    )
     if start > end:
         st.info(
             "No recorded activity coverage for these dates. "
@@ -369,13 +309,11 @@ def render_business_analysis() -> None:
         f"Effective comparison dates: {start:%Y-%m-%d} to {end:%Y-%m-%d} · "
         f"{(end - start).days + 1:,} calendar days."
     )
-    st.caption(
-        "Metro selection uses the imported city cohort. Rankings cover Yelp archive listings, "
-        "not the complete metropolitan competitor market."
-    )
     effective = replace(filters, start_date=start, end_date=end)
     try:
-        records = _business_activity(effective, context.import_revision)
+        records = _business_activity(
+            replace(effective, source_category=None), context.import_revision
+        )
         from sitesense.app import _import_is_unchanged
 
         if not _import_is_unchanged(context.import_revision):
@@ -394,15 +332,9 @@ def render_business_analysis() -> None:
             for row in summaries
             if source == "All source categories" or source in row.business.categories
         )
-        st.caption(f"Selected industry: {filters.category_label} → {source}.")
         with st.container(horizontal=True):
             st.metric(
                 "Recorded check-ins", f"{sum(row.checkin_count for row in selected):,}", border=True
-            )
-            st.metric(
-                "Check-ins / day",
-                f"{sum(row.checkin_count for row in selected) / ((end - start).days + 1):.3f}",
-                border=True,
             )
             st.metric("Listed businesses", f"{len(selected):,}", border=True)
             st.metric(
@@ -410,12 +342,28 @@ def render_business_analysis() -> None:
                 f"{sum(row.checkin_count > 0 for row in selected):,}",
                 border=True,
             )
-        st.caption(
-            "Includes listed businesses with no recorded activity "
-            "and listings without a usable ZIP."
-        )
         _category_comparison(summaries, effective)
         _business_comparison(context, selected, effective, source)
+        with st.expander("Ranking details"):
+            st.caption(
+                "Rankings use recorded Yelp check-ins, not customers or revenue, and cover "
+                "the imported city cohort rather than the complete metropolitan market. "
+                "Listings with zero recorded activity or missing coordinates remain included."
+            )
+            st.caption(
+                "Source categories use exact archive labels and may share businesses, so "
+                "their totals are not additive. Read sample sizes and largest-business "
+                "shares when comparing small groups."
+            )
+            st.caption(
+                "Ratings, reviews, status and categories describe the archive snapshot. "
+                "Check-ins belong to the whole listing, including listings with several "
+                "business types. Historical opening dates are unavailable."
+            )
+            st.caption(
+                "Monthly activity totals use selected covered dates, including partial "
+                "months and recorded zeros. Zero check-ins do not establish opening status."
+            )
     except ConfigurationError:
         render_setup("configuration")
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):

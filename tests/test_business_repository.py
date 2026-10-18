@@ -9,6 +9,7 @@ import pytest
 
 from sitesense import database, repository
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
+from sitesense.business_weather import BusinessDay
 from sitesense.models import Filters
 
 FILTERS = Filters("Philadelphia", "PA", "Restaurants", date(2019, 1, 4), date(2019, 2, 3))
@@ -193,3 +194,14 @@ def test_business_queries_aggregate_actual_dates_without_other_scopes(
         BusinessMonth("a", date(2019, 1, 1), 12),
         BusinessMonth("a", date(2019, 2, 1), 11),
     )
+    assert repository.load_scope_daily(FILTERS) == (
+        BusinessDay("scope", date(2019, 1, 4), 22),
+        BusinessDay("scope", date(2019, 1, 5), 7),
+        BusinessDay("scope", date(2019, 2, 3), 11),
+    )
+    assert repository.load_scope_daily(replace(FILTERS, source_category="Italian")) == (
+        BusinessDay("scope", date(2019, 1, 4), 5),
+        BusinessDay("scope", date(2019, 1, 5), 7),
+        BusinessDay("scope", date(2019, 2, 3), 11),
+    )
+    assert repository.load_scope_daily(replace(FILTERS, source_category="Ital")) == ()

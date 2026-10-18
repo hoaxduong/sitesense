@@ -17,13 +17,8 @@ coverage. Dates outside that history remain unavailable.
 broad category, city and effective period. Choosing a source category in the
 sidebar does not remove the other groups from this discovery ranking.
 
-The default ranking is **total recorded check-ins**, followed by **check-ins per
-day**: the group's total check-ins divided by inclusive calendar days in the
-effective period. The separate **check-ins per business per day** option divides
-again by the number of matching listed businesses. Listed business count is also
-available. For a common date window, total and per-day counts have the same rank;
-the daily average makes the time denominator explicit. Read normalized activity
-alongside the median, group size, number of businesses with check-ins and largest
+The ranking uses **Recorded check-ins** in the effective period. Read the counts
+alongside group size, the number of businesses with check-ins and the largest
 business's share of activity.
 Use **Minimum businesses per source category** to inspect rankings beyond very
 small groups. Its default of one keeps every source category available; increasing
@@ -40,33 +35,39 @@ scope and minimum-business filter.
 ## Who are the leading businesses and competitors?
 
 **Top businesses and competitors** uses the selected exact source category,
-with optional ZIP and name search. Rank by recorded check-ins in the effective
-period by default, followed by check-ins per day, source-snapshot rating or
-source-snapshot review count. Stable source
-IDs distinguish repeated names. Missing ratings sort last and zero-activity
-businesses remain available. Ordinal positions use stable tie ordering.
+with optional name search. Rank by Recorded check-ins in the effective
+period. Stable source IDs distinguish repeated names. Zero-activity businesses
+remain available. Ordinal positions use stable tie ordering.
 
-Research each business using its recorded activity, daily average, dates with
-check-ins, weekend activity share, ZIP, full source labels, snapshot rating,
+Research each business using its Recorded check-ins, dates with
+check-ins, weekend activity share, full source labels, snapshot rating,
 review count and operating status. Search narrows the visible list without
-changing its industry benchmark. Choose up to four businesses for a comparison
-and monthly activity chart of daily averages. Each monthly rate uses the selected calendar days
-inside that month, including partial months and zero-activity days.
+changing its industry benchmark. Choose up to four businesses for a shared
+weather/activity chart. Each line totals Recorded check-ins over the same
+calendar weeks or months, retaining partial periods and covered zero-activity days.
 
-**Business to investigate** selects one business for weather analysis independently
-of the comparison picks. Searches expose additional choices while retaining the
-current investigated business. City, broad-category and source-category changes
-reset incompatible selections; ordinary date changes retain valid business IDs.
+On Location map, check rows in the ranking table and use its toolbar action to
+open Compare businesses. Its single weather/activity chart displays one activity
+line per selected business, up to four, with shared weather boxplots. The map's
+weather/activity timeline always totals the full filtered
+business scope. City, broad-category and source-category changes reset
+incompatible selections; ordinary date changes retain valid business IDs.
+The comparison matrix also places snapshot profile fields, recorded totals,
+days with check-ins and weekend share side by side for those same businesses.
 
 ## How does weather correlate with one business's activity?
 
-The activity/weather chart uses daily recorded check-ins as a line on the left
-and true weather boxplots on the right, with time on the x-axis. When available,
+The activity/weather chart totals Recorded check-ins over the same calendar periods
+as its weather boxes: Monday-based calendar weeks for selected ranges of up to
+90 calendar days, and calendar months for longer ranges. The activity line and weather boxes use
+the same period midpoint. Tooltips identify the week or month, covered start/end
+dates and calendar-day count; partial periods include only the selected dates
+inside imported activity coverage. Zero-activity periods remain visible, including
+periods with no weather reports. Weather boxplots use the right axis. When available,
 boxes use routine hourly observations from the city's representative airport,
 shared across ZIP and business views. Temperature uses one distribution of measured
 temperatures. Precipitation uses accepted daily station totals in mm/day, including dry days. Boxes span Q1–Q3, with a
-median line, min/max whiskers and mean diamond. They group by calendar week for
-ranges up to 90 days and calendar month for longer ranges. Tooltips identify the
+median line, min/max whiskers and mean diamond. Tooltips identify the
 station, source, frequency, sample count and hourly coverage. Missing reports are
 excluded; dry hours remain zero. A dry period can have a zero-height rainfall box.
 
@@ -101,3 +102,7 @@ the archive snapshot. Historical opening dates are unavailable; zero check-ins
 do not establish whether a business was open or closed. Activity belongs to the
 whole listing, so a hotel's check-ins cannot be attributed specifically to its
 spa. Smaller source-category views do not extend the broad-sector forecast model.
+All primary pages now use [individual businesses](business-location-workspace.md).
+Location map and Compare businesses share the exact Source category filter and
+show individual recorded activity or independently trained business projections.
+The business analysis page no longer groups or filters its peer list by ZIP.

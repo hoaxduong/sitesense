@@ -6,11 +6,152 @@ from typing import Any
 import altair as alt
 
 from sitesense.weather_charts import (
+    activity_period_rows,
     weather_boxplot_caption,
     weather_boxplot_display_rows,
     weather_boxplot_layer,
     weather_boxplot_rows,
 )
+
+
+def test_monthly_activity_sums_daily_counts_with_partial_edges_and_zero_months() -> None:
+    start, end = date(2020, 1, 20), date(2020, 4, 20)
+    counts = {1: 1, 2: 2, 3: 0, 4: 3}
+    days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
+    rows = [{"Date": day.isoformat(), "Recorded check-ins": counts[day.month]} for day in days]
+    rows.extend(
+        [
+            {"Date": "2020-01-19", "Recorded check-ins": 999},
+            {"Date": "2020-04-21", "Recorded check-ins": 999},
+        ]
+    )
+
+    result = activity_period_rows(rows, start, end)
+
+    assert [row["Period"] for row in result] == [
+        "January 2020",
+        "February 2020",
+        "March 2020",
+        "April 2020",
+    ]
+    assert [row["Recorded check-ins"] for row in result] == [12, 58, 0, 60]
+    assert [row["Covered calendar days"] for row in result] == [12, 29, 31, 20]
+    assert result[0]["Period start"] == "2020-01-20"
+    assert result[-1]["Period end"] == "2020-04-20"
+    assert sum(row["Recorded check-ins"] for row in result) == 130
+    assert sum(row["Covered calendar days"] for row in result) == len(days)
+    assert [row["Recorded check-ins"] for row in activity_period_rows([], start, end)] == [
+        0,
+        0,
+        0,
+        0,
+    ]
+
+
+def test_weekly_activity_uses_monday_boundaries_and_clips_partial_weeks() -> None:
+    start, end = date(2020, 1, 3), date(2020, 1, 14)
+    rows = [
+        {"Date": f"2020-01-{day:02}", "Recorded check-ins": count}
+        for day, count in ((2, 999), (3, 2), (5, 3), (6, 7), (12, 11), (13, 13), (15, 999))
+    ]
+
+    result = activity_period_rows(rows, start, end)
+
+    assert [row["Period"] for row in result] == [
+        "Week of 2019-12-30",
+        "Week of 2020-01-06",
+        "Week of 2020-01-13",
+    ]
+    assert [row["Recorded check-ins"] for row in result] == [5, 18, 13]
+    assert [row["Covered calendar days"] for row in result] == [3, 7, 2]
+    assert [row["Period start"] for row in result] == ["2020-01-03", "2020-01-06", "2020-01-13"]
+    assert [row["Period end"] for row in result] == ["2020-01-05", "2020-01-12", "2020-01-14"]
+
+
+def test_observed_and_projected_segments_share_bins_without_unknown_zero_fill() -> None:
+    start, end = date(2020, 1, 1), date(2020, 4, 30)
+    observed = activity_period_rows(
+        [{"Date": "2020-02-15", "Recorded check-ins": 7}],
+        start,
+        end,
+        coverage=(date(2020, 2, 10), date(2020, 3, 15)),
+    )
+    projected = activity_period_rows(
+        [{"Date": "2020-03-16", "Projected check-ins": 2.5}],
+        start,
+        end,
+        coverage=(date(2020, 3, 16), end),
+        count_field="Projected check-ins",
+    )
+    assert [row["Period"] for row in observed] == ["February 2020", "March 2020"]
+    assert [row["Recorded check-ins"] for row in observed] == [7, 0]
+    assert [row["Covered calendar days"] for row in observed] == [20, 15]
+    assert [row["Period"] for row in projected] == ["March 2020", "April 2020"]
+    assert [row["Projected check-ins"] for row in projected] == [2.5, 0]
+    assert observed[-1]["Period midpoint"] == projected[0]["Period midpoint"]
+    assert activity_period_rows([], start, end, coverage=(date(2021, 1, 1), end)) == []
+
+
+def test_last_representable_partial_week_has_no_date_overflow() -> None:
+    start, end = date(9999, 12, 30), date.max
+    rows = activity_period_rows(
+        [{"Date": date.max.isoformat(), "Projected check-ins": 2.5}],
+        start,
+        end,
+        count_field="Projected check-ins",
+    )
+    assert len(rows) == 1
+    assert rows[0]["Period"] == "Week of 9999-12-27"
+    assert rows[0]["Period start"] == "9999-12-30"
+    assert rows[0]["Period end"] == date.max.isoformat()
+    assert rows[0]["Covered calendar days"] == 2
+    assert rows[0]["Projected check-ins"] == 2.5
+    weather = weather_boxplot_rows(
+        [{"Date": date.max.isoformat(), "Weather value": 10}],
+        start,
+        end,
+        align_calendar_periods=True,
+    )
+    assert weather[0]["Weather period"] == rows[0]["Period midpoint"]
+
+
+def test_calendar_centering_aligns_sparse_weather_and_activity_without_changing_reports() -> None:
+    start, end = date(2020, 1, 20), date(2020, 4, 20)
+    rows = [
+        {
+            "Date": day,
+            "Weather value": value,
+            "Weather station": station,
+            "Observation frequency": "Hourly",
+        }
+        for day, value, station in (
+            ("2020-01-31", 10, "A"),
+            ("2020-01-31", 20, "A"),
+            ("2020-01-20", -5, "B"),
+            ("2020-02-02", 5, "A"),
+        )
+    ]
+    legacy = weather_boxplot_rows(rows, start, end)
+    aligned = weather_boxplot_rows(rows, start, end, align_calendar_periods=True)
+    activity = activity_period_rows([], start, end)
+    centers = {row["Period"]: row["Period midpoint"] for row in activity}
+
+    assert [row["Weather period"] for row in aligned] == [
+        centers["January 2020"],
+        centers["January 2020"],
+        centers["January 2020"],
+        centers["February 2020"],
+    ]
+    assert legacy[0]["Weather period"] == "2020-01-31T00:00:00+00:00"
+    assert legacy[0]["Weather period"] != aligned[0]["Weather period"]
+    assert all(
+        {key: value for key, value in previous.items() if key != "Weather period"}
+        == {key: value for key, value in current.items() if key != "Weather period"}
+        for previous, current in zip(legacy, aligned, strict=True)
+    )
+    assert aligned[0]["Expected readings"] == 12 * 24
+    assert aligned[0]["Observed readings"] == 2
+    assert aligned[0]["Coverage %"] == 100 * 2 / (12 * 24)
 
 
 def test_weekly_boxes_preserve_samples_zeros_sources_and_zip_identity() -> None:

@@ -1,7 +1,9 @@
 """Daily observed weather and activity for one selected business."""
 
-from dataclasses import replace
-from datetime import date
+from collections import Counter
+from dataclasses import dataclass, replace
+from datetime import date, datetime
+from math import isfinite
 from typing import Any
 
 import pandas as pd  # type: ignore[import-untyped]
@@ -9,6 +11,7 @@ import psycopg
 import streamlit as st
 
 from sitesense import hourly_weather, repository
+from sitesense.business_activity import ProjectionResult, daily_projection
 from sitesense.business_weather import (
     BusinessDay,
     BusinessWeatherDay,
@@ -19,8 +22,9 @@ from sitesense.business_weather import (
 from sitesense.database import ConfigurationError
 from sitesense.location_weather import DailyWeather, load_daily_station_weather
 from sitesense.models import Business, Filters, WeatherCell
-from sitesense.ui import ScreenContext, render_setup
+from sitesense.ui import ScreenContext
 from sitesense.weather_charts import (
+    activity_period_rows,
     weather_boxplot_caption,
     weather_boxplot_display_rows,
     weather_boxplot_layer,
@@ -40,6 +44,17 @@ def _business_weather(
     return load_daily_station_weather((station,), filters.start_date, filters.end_date)
 
 
+@dataclass(frozen=True)
+class ActivityWeatherSeries:
+    """One business's evidence, kept separate on a shared weather chart."""
+
+    business_id: str
+    name: str
+    records: tuple[BusinessDay, ...]
+    coverage: tuple[date, date] | None
+    projected_days: tuple[dict[str, Any], ...] = ()
+
+
 def _render_activity_weather_chart(
     days_by_metric: dict[str, tuple[BusinessWeatherDay, ...]],
     metric: str,
@@ -48,24 +63,109 @@ def _render_activity_weather_chart(
     station: WeatherCell,
     *,
     hourly_weather_rows: list[dict[str, Any]] | None = None,
-) -> None:
-    """Align daily activity with raw weather distributions on one time axis."""
+    projected_days: list[dict[str, Any]] | None = None,
+    observed_coverage: tuple[date, date] | None = None,
+    daily_weather_rows: list[dict[str, Any]] | None = None,
+    business_series: tuple[ActivityWeatherSeries, ...] | None = None,
+) -> list[dict[str, Any]]:
+    """Align period activity totals with the same calendar bins as weather boxes."""
     if metric == "Precipitation (mm)":
         hourly_weather_rows = None
+    period = "week" if (end - start).days < 90 else "month"
     days = next(iter(days_by_metric.values()))
     rows = [
-        {
-            "Date": day.activity_date.isoformat(),
-            "Recorded check-ins": day.checkin_count,
-            "Series": "Recorded check-ins",
-            "Axis": "activity",
-        }
-        for day in days
+        dict(row, Series="Recorded check-ins", Axis="activity")
+        for row in activity_period_rows(
+            [
+                {
+                    "Date": day.activity_date.isoformat(),
+                    "Recorded check-ins": day.checkin_count,
+                }
+                for day in days
+            ],
+            start,
+            end,
+            coverage=observed_coverage,
+        )
     ]
+    projected_rows = []
+    if projected_days:
+        forecast_dates = [date.fromisoformat(row["Date"]) for row in projected_days]
+        projected_rows = [
+            dict(row, Series="Projected check-ins", Axis="projection")
+            for row in activity_period_rows(
+                projected_days,
+                start,
+                end,
+                coverage=(min(forecast_dates), max(forecast_dates)),
+                count_field="Projected check-ins",
+            )
+        ]
+        rows.extend(projected_rows)
+    business_labels: list[str] = []
+    if business_series is not None:
+        rows = []
+        projected_rows = []
+        names = Counter(series.name for series in business_series)
+        for series in business_series:
+            label = (
+                f"{series.name} · {series.business_id}"
+                if names[series.name] > 1 or series.name in {"Temperature", "Precipitation (mm)"}
+                else series.name
+            )
+            business_labels.append(label)
+            identity = {"Business": series.name, "Business ID": series.business_id, "Series": label}
+            periods = activity_period_rows(
+                [
+                    {"Date": day.activity_date.isoformat(), "Recorded check-ins": day.checkin_count}
+                    for day in series.records
+                    if day.business_id == series.business_id
+                ],
+                start,
+                end,
+                coverage=series.coverage,
+            )
+            for row in periods:
+                if series.coverage is None:
+                    row.update({"Recorded check-ins": None, "Covered calendar days": 0})
+                rows.append(dict(row, **identity, Axis="activity"))
+            if series.projected_days:
+                forecast_dates = [date.fromisoformat(row["Date"]) for row in series.projected_days]
+                projected_rows.extend(
+                    dict(row, **identity, Axis="projection")
+                    for row in activity_period_rows(
+                        list(series.projected_days),
+                        start,
+                        end,
+                        coverage=(min(forecast_dates), max(forecast_dates)),
+                        count_field="Projected check-ins",
+                    )
+                )
+        rows.extend(projected_rows)
+    period_axis = {
+        "title": period.title(),
+        "format": "%d %b %Y" if period == "week" else "%b %Y",
+        "values": [
+            {
+                "year": midpoint.year,
+                "month": midpoint.month,
+                "date": midpoint.day,
+                "hours": midpoint.hour,
+                "minutes": midpoint.minute,
+                "utc": True,
+            }
+            for midpoint in (
+                datetime.fromisoformat(row["Period midpoint"])
+                for row in activity_period_rows([], start, end)
+            )
+        ],
+    }
     rows.extend(
         weather_boxplot_rows(
             [dict(row, Axis="weather") for row in hourly_weather_rows]
             if hourly_weather_rows
+            else daily_weather_rows
+            if daily_weather_rows is not None
             else [
                 {
                     "Date": day.activity_date.isoformat(),
@@ -85,6 +185,7 @@ def _render_activity_weather_chart(
             start,
             end,
             combine_temperature=metric == "Temperature (°C)",
+            align_calendar_periods=True,
         )
     )
     color = {
@@ -93,6 +194,7 @@ def _render_activity_weather_chart(
         "scale": {
             "domain": [
                 "Recorded check-ins",
+                *(["Projected check-ins"] if projected_rows else []),
                 *(
                     ["Precipitation mm"]
                     if hourly_weather_rows and metric == "Precipitation (mm)"
@@ -101,12 +203,38 @@ def _render_activity_weather_chart(
                     else ["Temperature"]
                 ),
             ],
-            "range": ["#26745a", "#1c639b"]
-            if metric == "Precipitation (mm)"
-            else ["#26745a", "#e67e22"],
+            "range": [
+                "#26745a",
+                *(["#7855b8"] if projected_rows else []),
+                "#1c639b" if metric == "Precipitation (mm)" else "#e67e22",
+            ],
         },
         "legend": {"orient": "top", "title": None},
     }
+    if business_series is not None:
+        palette = ("#26745a", "#7855b8", "#c44747", "#39404a")
+        business_colors = {
+            business_id: palette[index]
+            for index, business_id in enumerate(
+                sorted(series.business_id for series in business_series)
+            )
+        }
+        color["scale"] = {
+            "domain": [
+                *business_labels,
+                *(days_by_metric if metric == "Precipitation (mm)" else ["Temperature"]),
+            ],
+            "range": [
+                *(business_colors[series.business_id] for series in business_series),
+                "#1c639b" if metric == "Precipitation (mm)" else "#e67e22",
+            ],
+        }
+        color["legend"] = {
+            "orient": "top",
+            "title": None,
+            "columns": {"expr": "width < 550 ? 1 : 3"},
+            "labelLimit": {"expr": "width < 550 ? max(100, width - 25) : 280"},
+        }
     weather_layer = weather_boxplot_layer(
         start,
         end,
@@ -119,53 +247,100 @@ def _render_activity_weather_chart(
     ]
     weather_layer["encoding"]["detail"].append({"field": "Series", "type": "nominal"})
     weather_layer["encoding"]["tooltip"].append({"field": "Series"})
+    weather_layer["encoding"]["x"].update(title=period.title(), axis=period_axis)
+    period_tooltip = [
+        {"field": "Period", "type": "nominal"},
+        {"field": "Period start", "type": "temporal", "format": "%Y-%m-%d"},
+        {"field": "Period end", "type": "temporal", "format": "%Y-%m-%d"},
+        {"field": "Covered calendar days", "type": "quantitative", "format": ",.0f"},
+    ]
+    for layer in weather_layer["layer"]:
+        layer["encoding"]["tooltip"] = [*period_tooltip, *layer["encoding"]["tooltip"]]
+    activity_layer: dict[str, Any] = {
+        "transform": [{"filter": "datum.Axis === 'activity'"}],
+        "mark": {"type": "line", "interpolate": "linear", "point": True},
+        "encoding": {
+            "x": {
+                "field": "Period midpoint",
+                "type": "temporal",
+                "title": period.title(),
+                "axis": period_axis,
+                "scale": {"type": "utc", "domain": [start.isoformat(), end.isoformat()]},
+            },
+            "y": {
+                "field": "Recorded check-ins",
+                "type": "quantitative",
+                "scale": {"zero": True},
+                "axis": {
+                    "title": "Check-ins" if projected_rows else "Recorded check-ins",
+                    "orient": "left",
+                    "tickMinStep": 1,
+                    "format": ",.0f",
+                    "titleColor": "#26745a",
+                },
+            },
+            "color": color,
+            "tooltip": [
+                *period_tooltip,
+                {"field": "Recorded check-ins", "type": "quantitative", "format": ",.0f"},
+            ],
+        },
+    }
+    if business_series is not None:
+        activity_layer["encoding"]["detail"] = {"field": "Business ID", "type": "nominal"}
+        activity_layer["encoding"]["tooltip"] = [
+            {"field": "Business"},
+            {"field": "Business ID"},
+            *activity_layer["encoding"]["tooltip"],
+        ]
+        activity_layer["encoding"]["y"]["axis"].pop("titleColor")
+    if projected_rows:
+        projection_layer = {
+            "transform": [{"filter": "datum.Axis === 'projection'"}],
+            "mark": {"type": "line", "interpolate": "linear", "point": True, "strokeDash": [6, 4]},
+            "encoding": {
+                **activity_layer["encoding"],
+                "y": dict(activity_layer["encoding"]["y"], field="Projected check-ins"),
+                "tooltip": [
+                    *(
+                        [{"field": "Business"}, {"field": "Business ID"}]
+                        if business_series is not None
+                        else []
+                    ),
+                    *period_tooltip,
+                    {"field": "Projected check-ins", "type": "quantitative", "format": ",.1f"},
+                ],
+            },
+        }
+        activity_layer = {
+            "layer": [activity_layer, projection_layer],
+            "resolve": {"scale": {"y": "shared"}},
+        }
+    chart_rows = weather_boxplot_display_rows(rows)
     st.vega_lite_chart(
-        pd.DataFrame(weather_boxplot_display_rows(rows)),
+        pd.DataFrame(chart_rows),
         {
-            "title": "Recorded activity and weather over time",
             "layer": [
                 weather_layer,
-                {
-                    "transform": [{"filter": "datum.Axis === 'activity'"}],
-                    "mark": {"type": "line", "interpolate": "monotone", "point": True},
-                    "encoding": {
-                        "x": {
-                            "field": "Date",
-                            "type": "temporal",
-                            "title": "Date",
-                            "scale": {
-                                "type": "utc",
-                                "domain": [start.isoformat(), end.isoformat()],
-                            },
-                        },
-                        "y": {
-                            "field": "Recorded check-ins",
-                            "type": "quantitative",
-                            "scale": {"zero": True},
-                            "axis": {
-                                "title": "Recorded check-ins / day (line)",
-                                "orient": "left",
-                                "tickMinStep": 1,
-                                "titleColor": "#26745a",
-                            },
-                        },
-                        "color": color,
-                        "tooltip": [
-                            {"field": "Date", "type": "temporal", "format": "%Y-%m-%d"},
-                            {"field": "Recorded check-ins", "type": "quantitative"},
-                        ],
-                    },
-                },
+                activity_layer,
             ],
             "resolve": {"scale": {"y": "independent"}},
             "config": {"numberFormat": ".1f"},
         },
         width="stretch",
         height=350,
-        alt=f"Daily recorded check-ins and {metric} distributions over time",
+        alt=(
+            f"Recorded and projected check-ins with {metric} boxes over shared calendar periods"
+            if projected_rows
+            else f"Recorded check-ins totaled over the same calendar periods as {metric} boxes"
+        ),
     )
-    st.caption(hourly_weather.caption(hourly_weather_rows or [], metric=metric))
-    st.caption(weather_boxplot_caption(start, end))
+    st.caption(
+        f"Recorded check-ins are totaled for each calendar {period}. "
+        + ("Solid: recorded · Dashed: projected. " if projected_rows else "")
+        + "Covered dates with no check-ins count as zero; uncovered dates remain unknown."
+    )
+    return chart_rows
 
 
 def _weather_band_table(
@@ -184,7 +359,7 @@ def _weather_band_table(
                 "Weather band": summary.band,
                 "Paired days": summary.day_count,
                 "Zero-activity days": summary.zero_activity_days,
-                "Median check-ins/day": summary.median_checkins,
+                "Median recorded check-ins": summary.median_checkins,
                 "Q1": summary.q1,
                 "Q3": summary.q3,
                 "Minimum": summary.min_checkins,
@@ -195,7 +370,12 @@ def _weather_band_table(
     )
 
 
-def render_business_weather(context: ScreenContext, business: Business, filters: Filters) -> None:
+def render_business_weather(
+    context: ScreenContext,
+    business: Business,
+    filters: Filters,
+    projection: ProjectionResult | None = None,
+) -> None:
     """Render exact-business daily associations within known activity coverage."""
     st.subheader("Weather and recorded activity")
     catalog = context.catalog
@@ -212,14 +392,15 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
         return
     start = max(filters.start_date, catalog.coverage.start_date)
     end = min(filters.end_date, catalog.coverage.end_date)
-    if end < start:
+    has_recorded = start <= end
+    if not has_recorded and projection is None:
         st.info("Choose dates within the available recorded activity history.")
         return
-    effective = replace(filters, start_date=start, end_date=end)
-    st.caption(
-        f"{selected.name} · business ID {selected.business_id} · "
-        f"{start:%Y-%m-%d} to {end:%Y-%m-%d}. Activity is measured per calendar day."
+    chart_start, chart_end = (
+        (filters.start_date, filters.end_date) if projection is not None else (start, end)
     )
+    effective = replace(filters, start_date=start, end_date=end)
+    st.caption(f"{selected.name} · {chart_start:%d %b %Y} – {chart_end:%d %b %Y}")
     weather_options = ("Temperature (°C)", "Precipitation (mm)")
     if st.session_state.get("business_weather_metric") not in weather_options:
         st.session_state["business_weather_metric"] = weather_options[0]
@@ -228,6 +409,8 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
         weather_options,
         key="business_weather_metric",
         persist_state="session",
+        width=250,
+        help="Weather and activity associations do not establish causation.",
     )
     station = next(
         (
@@ -240,33 +423,39 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
     )
     if station is None:
         st.info("This business has no mapped station observations for weather comparison.")
-        return
-    st.caption(
-        f"Daily association station: {station.station_name or station.weather_cell_id} "
-        f"({station.weather_cell_id}) · ACIS daily station observations."
-    )
-    try:
-        with st.spinner("Loading daily business activity and station observations…"):
-            records = _business_daily(effective, selected.business_id, context.import_revision)
-            weather = _business_weather(
-                effective, selected.business_id, station, context.import_revision
-            )
-        from sitesense.app import _import_is_unchanged
-
-        if not _import_is_unchanged(context.import_revision):
+        if projection is None:
             return
-    except ConfigurationError:
-        render_setup("configuration")
+    records: tuple[BusinessDay, ...] = ()
+    weather: DailyWeather = {}
+    try:
+        if has_recorded:
+            records = _business_daily(effective, selected.business_id, context.import_revision)
+    except (ConfigurationError, psycopg.Error, repository.DataUnavailableError):
+        st.warning(
+            "Recorded activity is unavailable. Missing activity has not been filled with zero."
+        )
+        has_recorded = False
+    if station is not None:
+        try:
+            weather = _business_weather(
+                replace(filters, start_date=chart_start, end_date=chart_end),
+                selected.business_id,
+                station,
+                context.import_revision,
+            )
+        except (ConfigurationError, psycopg.Error, repository.DataUnavailableError):
+            st.warning(
+                "Daily station observations are unavailable. Business activity remains visible."
+            )
+    from sitesense.app import _import_is_unchanged
+
+    if not _import_is_unchanged(context.import_revision):
         return
-    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
-        render_setup("migration")
+    if not has_recorded and projection is None:
         return
-    except repository.DataUnavailableError:
-        render_setup("import")
-        return
-    except psycopg.Error:
-        render_setup("connection")
-        return
+    chart_station = station or WeatherCell("unmapped", 0, 0, "unmapped", "No mapped station")
+    station_source = f"ACIS · {chart_station.station_name} ({chart_station.weather_cell_id})"
+    station_reports = weather.get(chart_station.weather_cell_id, {})
 
     measures = (
         {"Precipitation (mm)": "pcpn"}
@@ -280,50 +469,19 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
             start,
             end,
             catalog.coverage,
-            weather.get(station.weather_cell_id, {}),
+            station_reports,
             variable,
         )
+        if has_recorded
+        else ()
         for measure, variable in measures.items()
     }
-    summaries = {measure: summarize_correlation(days) for measure, days in days_by_metric.items()}
-    with st.container(horizontal=True):
-        st.metric("Calendar days", f"{len(next(iter(days_by_metric.values()))):,}", border=True)
-        for measure, summary in summaries.items():
-            label = {"tmax": "High", "tmin": "Low", "pcpn": "Rain"}[measures[measure]]
-            st.metric(f"{label} paired days", f"{summary.paired_days:,}", border=True)
-            st.metric(f"Missing {label.lower()} days", f"{summary.missing_days:,}", border=True)
-            st.metric(
-                f"{label} Pearson r (unadjusted)",
-                f"{summary.pearson_r:.3f}" if summary.pearson_r is not None else "Unavailable",
-                border=True,
-            )
-    st.caption(
-        "Zero recorded check-ins are included on covered dates; they do not establish "
-        "whether the business was open or closed. Missing or rejected weather remains "
-        "unknown and is excluded from the paired days. Trace rainfall is treated as 0 mm."
+    summaries = (
+        {measure: summarize_correlation(days) for measure, days in days_by_metric.items()}
+        if has_recorded and station is not None
+        else {}
     )
-    if metric == "Temperature (°C)":
-        st.caption(
-            "Daily high and low paired-day counts and correlations each use their own "
-            "accepted ACIS observations. They are calculated separately."
-        )
-    if any(summary.paired_days < 30 for summary in summaries.values()):
-        st.warning(
-            "Fewer than 30 paired days are available for at least one weather measure; "
-            "read its paired-day count before interpreting the association."
-        )
-    if any(summary.pearson_r is None for summary in summaries.values()):
-        st.info(
-            "Pearson r requires at least three paired days and variation in both weather "
-            "and recorded activity."
-        )
-    st.caption(
-        "This unadjusted correlation does not account for weekdays, seasonality or other "
-        "confounding factors. It does not establish causation or statistical significance. "
-        "Check-in dates use assumed source-local labels; alignment with station report "
-        "dates is unverified. Check-ins are recorded activity, not customers or revenue."
-    )
-    if not any(summary.paired_days for summary in summaries.values()):
+    if summaries and not any(summary.paired_days for summary in summaries.values()):
         st.info("No accepted observations for this weather variable match the selected dates.")
     days = next(iter(days_by_metric.values()))
     table = pd.DataFrame(
@@ -339,17 +497,107 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
             for index, day in enumerate(days)
         ]
     )
-    table["Date"] = pd.to_datetime(table["Date"])
+    if not table.empty:
+        table["Date"] = pd.to_datetime(table["Date"])
     hourly_rows = (
         []
-        if metric == "Precipitation (mm)"
+        if metric == "Precipitation (mm)" or station is None
         else hourly_weather.chart_rows(
-            hourly_weather.load_samples(effective.city, effective.state, start, end), metric
+            hourly_weather.load_samples(effective.city, effective.state, chart_start, chart_end),
+            metric,
         )
     )
+    weather_rows = None
+    if projection is not None:
+        weather_rows = []
+        for day, reports in station_reports.items():
+            for measure, variable in measures.items():
+                value = reports.get(variable)
+                if value is None or not isfinite(value) or (variable == "pcpn" and value < 0):
+                    continue
+                weather_rows.append(
+                    {
+                        "Date": day.isoformat(),
+                        "Weather value": value,
+                        "Weather source": station_source,
+                        "Series": measure,
+                        "Weather station": chart_station.station_name
+                        or chart_station.weather_cell_id,
+                        "Observation frequency": "Daily summaries",
+                        "Axis": "weather",
+                    }
+                )
+    projected_days = daily_projection(projection, selected.business_id) if projection else []
+    if not has_recorded and not projected_days:
+        st.info("No recorded activity or supported projection is available for these dates.")
     _render_activity_weather_chart(
-        days_by_metric, metric, start, end, station, hourly_weather_rows=hourly_rows
+        days_by_metric,
+        metric,
+        chart_start,
+        chart_end,
+        chart_station,
+        hourly_weather_rows=hourly_rows,
+        projected_days=projected_days,
+        observed_coverage=(start, end) if has_recorded else (date.max, date.min),
+        daily_weather_rows=weather_rows,
     )
+    with st.expander("Analysis details"):
+        st.caption(f"Business ID: {selected.business_id}")
+        if station is not None:
+            st.caption(
+                f"Daily association station: {station.station_name or station.weather_cell_id} "
+                f"({station.weather_cell_id}) · ACIS daily station observations."
+            )
+        if summaries:
+            with st.container(horizontal=True):
+                st.metric("Calendar days", f"{len(days):,}", border=True)
+                for measure, summary in summaries.items():
+                    label = {"tmax": "High", "tmin": "Low", "pcpn": "Rain"}[measures[measure]]
+                    st.metric(f"{label} paired days", f"{summary.paired_days:,}", border=True)
+                    st.metric(
+                        f"Missing {label.lower()} days", f"{summary.missing_days:,}", border=True
+                    )
+                    st.metric(
+                        f"{label} Pearson r (unadjusted)",
+                        (
+                            f"{summary.pearson_r:.3f}"
+                            if summary.pearson_r is not None
+                            else "Unavailable"
+                        ),
+                        border=True,
+                    )
+            if any(summary.paired_days < 30 for summary in summaries.values()):
+                st.warning(
+                    "Fewer than 30 paired days are available for at least one weather measure; "
+                    "read its paired-day count before interpreting the association."
+                )
+            if any(summary.pearson_r is None for summary in summaries.values()):
+                st.info(
+                    "Pearson r requires at least three paired days and variation in both weather "
+                    "and recorded activity."
+                )
+            st.caption(
+                "Correlations use daily pairs, calculated separately for each weather measure. "
+                "Missing or rejected weather is excluded; trace rainfall is treated as 0 mm. "
+                "Zero check-ins do not establish whether a business was open or closed."
+            )
+            st.caption(
+                "Unadjusted correlations do not account for weekdays, seasonality or other "
+                "confounding factors, and do not establish causation or statistical significance. "
+                "Check-in dates use assumed source-local labels; alignment with station report "
+                "dates is unverified. Check-ins measure activity, not customers or revenue."
+            )
+        st.caption(
+            "Weather and activity share calendar bins. Recorded totals include only selected "
+            "dates inside imported activity coverage; activity remains visible without weather."
+        )
+        if projected_days:
+            st.caption(
+                "The dashed purple line totals projected check-ins only after imported activity "
+                "coverage ends. Weather boxes contain accepted observations only."
+            )
+        st.caption(hourly_weather.caption(hourly_rows, metric=metric))
+        st.caption(weather_boxplot_caption(chart_start, chart_end))
     if hourly_rows:
         hourly_panel = st.expander(
             "Hourly station observations used by the boxes", on_change="rerun"
@@ -369,6 +617,8 @@ def render_business_weather(context: ScreenContext, business: Business, filters:
                     mime="text/csv",
                     on_click="ignore",
                 )
+    if not has_recorded:
+        return
     with st.expander("Daily observations"):
         st.dataframe(
             table,

@@ -237,7 +237,7 @@ def load_activity(
     *,
     business_ids: tuple[str, ...] | None = None,
 ) -> tuple[ActivityRecord, ...]:
-    """Return city/category counts, optionally restricted to exact cohort members.
+    """Return exact city/category/source counts, optionally restricted to cohort members.
 
     Area 0 retains unusable ZIPs in city denominators. An empty cohort means no
     activity, while None preserves the unrestricted current screen behavior.
@@ -249,6 +249,9 @@ def load_activity(
     start = previous_year(filters.start_date) if include_previous_year else filters.start_date
     end = previous_year(filters.end_date) if include_previous_year else filters.end_date
     member_condition = " AND b.business_id = ANY(%s::text[])" if business_ids is not None else ""
+    source_condition = (
+        " AND b.categories @> ARRAY[%s]::text[]" if filters.source_category is not None else ""
+    )
     parameters: tuple[object, ...] = (
         filters.city,
         filters.state,
@@ -258,6 +261,8 @@ def load_activity(
         start,
         end,
     )
+    if filters.source_category is not None:
+        parameters += (filters.source_category,)
     if business_ids is not None:
         parameters += (list(business_ids),)
     with connect() as connection:
@@ -270,6 +275,7 @@ def load_activity(
                  AND b.categories @> ARRAY[%s]::text[]
                  AND ((a.activity_date BETWEEN %s AND %s)
                       OR (a.activity_date BETWEEN %s AND %s))"""
+            + source_condition
             + member_condition
             + """ GROUP BY b.area_id, a.activity_date, a.hour_of_day
                ORDER BY b.area_id, a.activity_date, a.hour_of_day""",
@@ -346,6 +352,41 @@ def load_business_monthly(
             ),
         ).fetchall()
     return tuple(BusinessMonth(*row) for row in rows)
+
+
+def load_scope_daily(filters: Filters) -> tuple[BusinessDay, ...]:
+    """Sum all matching businesses once per date, including unmapped listings.
+
+    The synthetic ``scope`` identifier lets the existing calendar chart consume
+    these totals. No map limit, selected business or area enters this query.
+    """
+    if filters.end_date < filters.start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    source_condition = (
+        " AND b.categories @> ARRAY[%s]::text[]" if filters.source_category is not None else ""
+    )
+    parameters: tuple[object, ...] = (
+        filters.city,
+        filters.state,
+        filters.category,
+        filters.start_date,
+        filters.end_date,
+    )
+    if filters.source_category is not None:
+        parameters += (filters.source_category,)
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT 'scope', a.activity_date, sum(a.checkin_count)
+               FROM sitesense.business_activity_hourly AS a
+               JOIN sitesense.businesses AS b USING (business_id)
+               WHERE b.canonical_city = %s AND b.canonical_state = %s
+                 AND b.categories @> ARRAY[%s]::text[]
+                 AND a.activity_date BETWEEN %s AND %s"""
+            + source_condition
+            + " GROUP BY a.activity_date ORDER BY a.activity_date",
+            parameters,
+        ).fetchall()
+    return tuple(BusinessDay(*row) for row in rows)
 
 
 def load_business_daily(filters: Filters, business_id: str) -> tuple[BusinessDay, ...]:

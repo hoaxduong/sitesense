@@ -225,13 +225,11 @@ def test_sidebar_inputs_follow_industry_flow_and_all_source_categories_are_ranke
     assert not any(widget.key == "business_tags" for widget in app.multiselect)
     assert _metrics(app) == {
         "Recorded check-ins": "56",
-        "Check-ins / day": "8.000",
         "Listed businesses": "7",
         "With recorded activity": "5",
     }
     assert [metric.label for metric in app.metric] == [
         "Recorded check-ins",
-        "Check-ins / day",
         "Listed businesses",
         "With recorded activity",
     ]
@@ -255,12 +253,8 @@ def test_sidebar_inputs_follow_industry_flow_and_all_source_categories_are_ranke
     assert table.loc["Pizza", "Businesses"] == 2
     assert table.loc["Pizza", "With check-ins"] == 1
     assert table.loc["Pizza", "Recorded check-ins"] == 21
-    assert table.loc["Pizza", "Check-ins / day"] == 3
-    assert table.loc["Pizza", "Check-ins / business / day"] == 1.5
     assert table.loc["Italian", "Recorded check-ins"] == 28
-    columns = table.columns.tolist()
-    assert columns.index("Check-ins / day") == columns.index("Recorded check-ins") + 1
-    assert columns.index("Recorded check-ins") < columns.index("Check-ins / business / day")
+    assert not any("/ day" in column for column in table.columns)
 
 
 def test_source_filter_is_exact_and_does_not_narrow_parent_category_rankings(
@@ -274,13 +268,12 @@ def test_source_filter_is_exact_and_does_not_narrow_parent_category_rankings(
     assert _category_table(app).equals(parent_ranking)
     assert _metrics(app) == {
         "Recorded check-ins": "21",
-        "Check-ins / day": "3.000",
         "Listed businesses": "2",
         "With recorded activity": "1",
     }
     ranking = _business_ranking(app).set_index("Business ID")
     assert set(ranking.index) == {"Philadelphia:r000001", "Philadelphia:r000003"}
-    assert ranking.loc["Philadelphia:r000003", "Check-ins / day"] == 0
+    assert ranking.loc["Philadelphia:r000003", "Recorded check-ins"] == 0
     assert "Philadelphia:r000004" not in ranking.index
     assert app.selectbox(key="business_focus").value == "Philadelphia:r000001"
     app.selectbox(key="business_source_category").set_value("Pizza Delivery").run()
@@ -293,58 +286,39 @@ def test_source_filter_is_exact_and_does_not_narrow_parent_category_rankings(
     assert imported_businesses.activity_calls[-1].category == "Restaurants"
 
 
-def test_category_ranking_criteria_change_order_without_dropping_small_groups(
+def test_category_rankings_always_use_recorded_totals_and_keep_small_groups(
     imported_businesses: ImportedBusinesses,
 ) -> None:
     app = _app()
-    ranking = app.selectbox(key="business_category_rank")
-    assert ranking.value == "Recorded check-ins"
-    assert ranking.options[:2] == ["Recorded check-ins", "Check-ins / day"]
-    ranking.set_value("Check-ins / day").run()
-    assert not app.exception
-    assert _category_table(app)["Source category"].tolist()[:3] == [
-        "Italian",
-        "Pizza",
-        "Pizza Delivery",
-    ]
-    app.selectbox(key="business_category_rank").set_value("Check-ins / business / day").run()
-    assert not app.exception
-    assert _category_table(app)["Source category"].tolist()[:3] == [
-        "Italian",
-        "Pizza Delivery",
-        "Pizza",
-    ]
-    app.selectbox(key="business_category_rank").set_value("Listed businesses").run()
-    assert not app.exception
+    assert not any(widget.key == "business_category_rank" for widget in app.selectbox)
     table = _category_table(app)
-    assert table["Source category"].tolist()[:5] == [
-        "Italian",
-        "Pizza",
-        "Chinese",
-        "Mexican",
-        "Pizza Delivery",
-    ]
-    assert table["Businesses"].tolist()[:3] == [2, 2, 1]
+    assert table["Source category"].tolist()[:3] == ["Italian", "Pizza", "Pizza Delivery"]
+    assert table["Recorded check-ins"].tolist()[:3] == [28, 21, 14]
     assert "Quiet tag 1" in table["Source category"].tolist()
+    assert not any("/ day" in column for column in table.columns)
 
 
-def test_legacy_weekly_rank_controls_reset_to_totals_and_keep_new_daily_choices(
+def test_legacy_rate_rank_state_does_not_change_recorded_total_rankings(
     imported_businesses: ImportedBusinesses,
 ) -> None:
     app = AppTest.from_file(str(APP_FILE), default_timeout=15).run()
     assert not app.exception
-    app.session_state["business_category_rank"] = "Check-ins / business / week"
-    app.session_state["business_rank"] = "Check-ins / week"
+    app.session_state["business_category_rank"] = "Check-ins / business / day"
+    app.session_state["business_rank"] = "Check-ins / day"
     app.switch_page(PAGE_FILE).run()
     assert not app.exception
-    assert app.selectbox(key="business_category_rank").value == "Recorded check-ins"
-    assert app.selectbox(key="business_rank").value == "Recorded check-ins"
-    app.selectbox(key="business_category_rank").set_value("Check-ins / day").run()
-    app.selectbox(key="business_rank").set_value("Check-ins / day").run()
-    app.run()
-    assert not app.exception
-    assert app.selectbox(key="business_category_rank").value == "Check-ins / day"
-    assert app.selectbox(key="business_rank").value == "Check-ins / day"
+    assert not any(
+        widget.key in ("business_category_rank", "business_rank") for widget in app.selectbox
+    )
+    assert _category_table(app)["Source category"].tolist()[:3] == [
+        "Italian",
+        "Pizza",
+        "Pizza Delivery",
+    ]
+    assert _business_ranking(app)["Business ID"].tolist()[:2] == [
+        "Philadelphia:r000001",
+        "Philadelphia:r000004",
+    ]
 
 
 def test_minimum_business_filter_only_changes_category_rankings(
@@ -382,6 +356,7 @@ def test_minimum_business_filter_only_changes_category_rankings(
     exported = list(csv.DictReader(io.StringIO(downloads["Download source category rankings"])))
     assert {row["Minimum businesses"] for row in exported} == {"2"}
     assert {row["Source category"] for row in exported} == {"Italian", "Pizza"}
+    assert not any("/ day" in column for column in exported[0])
     app.number_input(key="business_category_minimum").set_value(1_000).run()
     assert not app.exception
     assert not any("Source category" in frame.value.columns for frame in app.dataframe)
@@ -394,40 +369,18 @@ def test_minimum_business_filter_only_changes_category_rankings(
     assert len(imported_businesses.monthly_calls) == monthly_calls
 
 
-def test_business_rankings_keep_zero_activity_and_distinguish_snapshot_criteria(
+def test_business_rankings_use_recorded_totals_and_keep_zero_activity(
     imported_businesses: ImportedBusinesses,
 ) -> None:
     app = _app()
-    ranking_control = app.selectbox(key="business_rank")
-    assert ranking_control.value == "Recorded check-ins"
-    assert ranking_control.options[:2] == ["Recorded check-ins", "Check-ins / day"]
-    columns = _business_ranking(app).columns.tolist()
-    assert columns.index("Check-ins / day") == columns.index("Recorded check-ins") + 1
-    assert _business_ranking(app)["Business ID"].tolist()[:2] == [
-        "Philadelphia:r000001",
-        "Philadelphia:r000004",
-    ]
-    ranking_control.set_value("Check-ins / day").run()
-    assert not app.exception
+    assert not any(widget.key == "business_rank" for widget in app.selectbox)
     ranking = _business_ranking(app)
-    assert ranking["Business ID"].tolist()[:2] == [
-        "Philadelphia:r000001",
-        "Philadelphia:r000004",
-    ]
-    assert ranking.iloc[0]["Check-ins / day"] == 3
-    app.selectbox(key="business_rank").set_value("Rating (snapshot)").run()
-    assert not app.exception
-    ranking = _business_ranking(app)
-    assert ranking["Business ID"].tolist()[:2] == ["Philadelphia:r000003", "Philadelphia:r000002"]
-    assert ranking.iloc[0]["Recorded check-ins"] == 0
-    assert ranking.iloc[-1]["Business ID"] == "Philadelphia:r000004"
-    app.selectbox(key="business_rank").set_value("Reviews (snapshot)").run()
-    assert not app.exception
-    assert _business_ranking(app)["Business ID"].tolist()[:2] == [
-        "Philadelphia:r000004",
-        "Philadelphia:r000002",
-    ]
-    assert len(_business_ranking(app)) == 7
+    assert ranking["Business ID"].tolist()[:2] == ["Philadelphia:r000001", "Philadelphia:r000004"]
+    assert ranking["Recorded check-ins"].tolist()[:2] == [21, 14]
+    assert ranking.set_index("Business ID").loc["Philadelphia:r000003", "Recorded check-ins"] == 0
+    assert not any("/ day" in column for column in ranking.columns)
+    assert {"Rating (snapshot)", "Reviews (snapshot)"}.issubset(ranking.columns)
+    assert len(ranking) == 7
 
 
 def test_duplicate_names_keep_distinct_ids_and_empty_comparison_keeps_investigation(
@@ -456,7 +409,6 @@ def test_duplicate_names_keep_distinct_ids_and_empty_comparison_keeps_investigat
     assert not app.exception
     assert app.selectbox(key="business_focus").value == "Philadelphia:r000002"
     assert any("no mapped station observations" in info.value for info in app.info)
-    assert any("Philadelphia:r000002" in caption.value for caption in app.caption)
 
 
 def test_source_group_changes_reset_picks_and_limit_comparison_to_four(
@@ -482,13 +434,11 @@ def test_navigation_preserves_source_filters_rankings_selection_and_monthly_char
 ) -> None:
     app = _app()
     app.selectbox(key="business_source_category").set_value("Pizza").run()
-    app.selectbox(key="business_category_rank").set_value("Listed businesses").run()
     app.number_input(key="business_category_minimum").set_value(2).run()
     app.selectbox(key="business_category_limit").set_value(20).run()
-    app.selectbox(key="business_rank").set_value("Rating (snapshot)").run()
-    app.selectbox(key="business_zip").set_value("19002").run()
     app.text_input(key="business_search").set_value("Quiet").run()
     app.multiselect(key="business_picks").set_value(["Philadelphia:r000003"]).run()
+    app.selectbox(key="business_focus").set_value("Philadelphia:r000003").run()
     assert not app.exception
     monthly_calls = len(imported_businesses.monthly_calls)
     app.switch_page("src/sitesense/app_pages/location_map.py").run()
@@ -498,11 +448,9 @@ def test_navigation_preserves_source_filters_rankings_selection_and_monthly_char
     assert not app.exception
     assert app.header[0].value == "Business analysis"
     assert app.selectbox(key="business_source_category").value == "Pizza"
-    assert app.selectbox(key="business_category_rank").value == "Listed businesses"
     assert app.number_input(key="business_category_minimum").value == 2
     assert app.selectbox(key="business_category_limit").value == 20
-    assert app.selectbox(key="business_rank").value == "Rating (snapshot)"
-    assert app.selectbox(key="business_zip").value == "19002"
+    assert all("ZIP" not in item.label for item in app.selectbox)
     assert app.text_input(key="business_search").value == "Quiet"
     assert app.multiselect(key="business_picks").value == ["Philadelphia:r000003"]
     assert app.selectbox(key="business_focus").value == "Philadelphia:r000003"
@@ -517,13 +465,12 @@ def test_city_and_broad_category_changes_remove_stale_source_and_business_filter
 ) -> None:
     app = _app()
     app.selectbox(key="business_source_category").set_value("Pizza").run()
-    app.selectbox(key="business_zip").set_value("19002").run()
     app.text_input(key="business_search").set_value("Quiet").run()
     app.selectbox(key="category").set_value("Day Spas").run()
     assert not app.exception
     assert app.selectbox(key="business_source_category").value == "All source categories"
     assert "Pizza" not in app.selectbox(key="business_source_category").options
-    assert app.selectbox(key="business_zip").value == "All ZIPs"
+    assert all("ZIP" not in item.label for item in app.selectbox)
     assert app.text_input(key="business_search").value == ""
     assert app.multiselect(key="business_picks").value == [
         "Philadelphia:s000001",
@@ -565,7 +512,7 @@ def test_outside_coverage_has_no_historical_zeros_or_business_queries(
     assert any("No recorded activity coverage" in info.value for info in app.info)
 
 
-def test_partial_coverage_clips_query_dates_and_rate_denominators(
+def test_partial_coverage_clips_queries_and_preserves_monthly_recorded_totals(
     imported_businesses: ImportedBusinesses, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     charts: list[pd.DataFrame] = []
@@ -584,21 +531,24 @@ def test_partial_coverage_clips_query_dates_and_rate_denominators(
     assert (effective.start_date, effective.end_date) == (date(2020, 1, 31), date(2020, 2, 4))
     assert imported_businesses.monthly_calls[-1][0] == effective
     assert _metrics(app)["Recorded check-ins"] == "35"
-    assert _metrics(app)["Check-ins / day"] == "7.000"
+    assert "Check-ins / day" not in _metrics(app)
     assert any("Only dates inside the recorded history" in w.value for w in app.warning)
     assert any("2020-01-31 to 2020-02-04 · 5 calendar days" in c.value for c in app.caption)
     comparison = _comparison_table(app).set_index("Business ID")
-    assert comparison.loc["Philadelphia:r000001", "Check-ins / day"] == 1.4
-    assert comparison.loc["Philadelphia:r000004", "Check-ins / day"] == 2.8
+    assert comparison.loc["Philadelphia:r000001", "Recorded check-ins"] == 7
+    assert comparison.loc["Philadelphia:r000004", "Recorded check-ins"] == 14
+    assert "Check-ins / day" not in comparison.columns
     monthly = charts[-1]
+    assert "Recorded check-ins" in monthly.columns
+    assert not any("/ day" in column for column in monthly.columns)
     # January contains one selected day; February contains four, including zero days.
     same_name = monthly[monthly["Business"].str.endswith("000001")]
     parcel = monthly[monthly["Business"].str.endswith("000004")]
-    assert same_name.set_index("Month")["Recorded check-ins / day"].to_dict() == {
+    assert same_name.set_index("Month")["Recorded check-ins"].to_dict() == {
         date(2020, 1, 1): 0,
-        date(2020, 2, 1): 1.75,
+        date(2020, 2, 1): 7,
     }
-    assert parcel.set_index("Month")["Recorded check-ins / day"].to_dict() == {
+    assert parcel.set_index("Month")["Recorded check-ins"].to_dict() == {
         date(2020, 1, 1): 14,
         date(2020, 2, 1): 0,
     }
@@ -628,7 +578,7 @@ def test_queries_cache_by_revision_without_area_queries_or_model_claims(
     assert len(imported_businesses.activity_calls) == activity_calls + 1
     assert len(imported_businesses.monthly_calls) == monthly_calls + 1
     assert _metrics(app)["Recorded check-ins"] == "112"
-    assert _metrics(app)["Check-ins / day"] == "16.000"
+    assert "Check-ins / day" not in _metrics(app)
     assert app.session_state["screen_context"].import_revision == "business-import-two"
     assert not app.session_state["screen_context"].records
     assert not app.session_state["screen_context"].summaries

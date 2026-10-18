@@ -7,12 +7,89 @@ from statistics import fmean, quantiles
 from typing import Any
 
 
-def weather_boxplot_rows(
-    rows: list[dict[str, Any]], start: date, end: date, *, combine_temperature: bool = False
-) -> list[dict[str, Any]]:
-    """Keep samples grouped by report period, ZIP, source, station and frequency."""
-    groups: dict[tuple[str, str, str, str, str, date], list[dict[str, Any]]] = {}
+def _calendar_period(day: date, start: date, end: date) -> tuple[date, date, dict[str, Any]]:
+    """Use one clipped calendar bin for activity totals and weather distributions."""
     weekly = (end - start).days < 90
+    first = day - timedelta(days=day.weekday()) if weekly else day.replace(day=1)
+    last = (
+        date.fromordinal(min(first.toordinal() + 6, date.max.toordinal()))
+        if weekly
+        else first.replace(day=monthrange(first.year, first.month)[1])
+    )
+    lower, upper = max(start, first), min(end, last)
+    midpoint = datetime.combine(lower, time(), tzinfo=UTC) + (upper - lower) / 2
+    return (
+        first,
+        last,
+        {
+            "Period": f"Week of {first:%Y-%m-%d}" if weekly else f"{first:%B %Y}",
+            "Period start": lower.isoformat(),
+            "Period end": upper.isoformat(),
+            "Covered calendar days": (upper - lower).days + 1,
+            "Period midpoint": midpoint.isoformat(),
+        },
+    )
+
+
+def activity_period_rows(
+    rows: list[dict[str, Any]],
+    start: date,
+    end: date,
+    *,
+    coverage: tuple[date, date] | None = None,
+    count_field: str = "Recorded check-ins",
+) -> list[dict[str, Any]]:
+    """Total counts in shared calendar bins within the supplied evidence coverage.
+
+    Coverage defaults to the complete window for existing recorded-only callers.
+    Covered bins include zero totals; dates outside coverage create no activity
+    rows. Midpoints use the complete window so evidence segments align with weather.
+    """
+    if end < start:
+        raise ValueError("The end date must be on or after the start date.")
+    lower, upper = (start, end) if coverage is None else coverage
+    lower, upper = max(start, lower), min(end, upper)
+    periods: dict[date, dict[str, Any]] = {}
+    cursor = lower
+    while cursor <= upper:
+        first, _, metadata = _calendar_period(cursor, start, end)
+        period_start = max(lower, date.fromisoformat(metadata["Period start"]))
+        period_end = min(upper, date.fromisoformat(metadata["Period end"]))
+        periods[first] = dict(
+            metadata,
+            **{
+                count_field: 0,
+                "Period start": period_start.isoformat(),
+                "Period end": period_end.isoformat(),
+                "Covered calendar days": (period_end - period_start).days + 1,
+            },
+        )
+        if period_end == upper:
+            break
+        cursor = period_end + timedelta(days=1)
+    for row in rows:
+        day = date.fromisoformat(str(row["Date"])[:10])
+        if lower <= day <= upper:
+            first, _, _ = _calendar_period(day, start, end)
+            periods[first][count_field] += row[count_field]
+    return list(periods.values())
+
+
+def weather_boxplot_rows(
+    rows: list[dict[str, Any]],
+    start: date,
+    end: date,
+    *,
+    combine_temperature: bool = False,
+    align_calendar_periods: bool = False,
+) -> list[dict[str, Any]]:
+    """Keep samples grouped by report period, ZIP, source, station and frequency.
+
+    Calendar centering aligns boxes with activity totals even when only part of
+    a period has weather reports; report counts and distribution inputs remain
+    unchanged. The default retains the legacy observation-centered positions.
+    """
+    groups: dict[tuple[str, str, str, str, str, date], list[dict[str, Any]]] = {}
     for row in rows:
         day = date.fromisoformat(str(row["Date"])[:10])
         if not start <= day <= end:
@@ -25,7 +102,7 @@ def weather_boxplot_rows(
                     "Series": "Temperature",
                 },
             )
-        first = day - timedelta(days=day.weekday()) if weekly else day.replace(day=1)
+        first, _, _ = _calendar_period(day, start, end)
         key = (
             str(row.get("ZIP area", "")),
             str(row.get("Weather source", "")),
@@ -37,11 +114,7 @@ def weather_boxplot_rows(
         groups.setdefault(key, []).append(row)
     result: list[dict[str, Any]] = []
     for (_, _, _, frequency, _, first), samples in groups.items():
-        last = (
-            first + timedelta(days=6)
-            if weekly
-            else first.replace(day=monthrange(first.year, first.month)[1])
-        )
+        _, last, period = _calendar_period(max(start, first), start, end)
         # Center partial periods on their observations, keeping every box in the date range.
         observed = [
             row
@@ -58,8 +131,11 @@ def weather_boxplot_rows(
             else [values[0] if values else None] * 3
         )
         metadata = {
+            **period,
             "Observation frequency": frequency,
-            "Weather period": midpoint.isoformat(),
+            "Weather period": period["Period midpoint"]
+            if align_calendar_periods
+            else midpoint.isoformat(),
             "First report": min(days).isoformat() if observed else None,
             "Last report": max(days).isoformat() if observed else None,
             "Observed days": len(set(days)) if observed else 0,

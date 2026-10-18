@@ -1,13 +1,13 @@
 """Shared filters and native navigation for populated SiteSense screens."""
 
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import psycopg
 import streamlit as st
 
-from sitesense import exploration, repository
-from sitesense.analytics import summarize_areas
+from sitesense import repository
 from sitesense.database import ConfigurationError
 from sitesense.date_filters import (
     CUSTOM,
@@ -104,34 +104,29 @@ def _screen_dates(coverage: DateCoverage) -> tuple[date, date]:
                 st.form_submit_button(
                     "Cancel", key="date_range_cancel", on_click=_cancel_custom_dates
                 )
-        st.caption("Edit both dates, then Apply. Results use the applied dates below.")
     if error := st.session_state.get("date_range_error"):
         st.info(error)
     dates = st.session_state["date_range"]
-    st.caption(f"Applied dates: {dates[0]:%Y-%m-%d} to {dates[1]:%Y-%m-%d}.")
-    st.caption("The same dates apply to all exploration pages.")
-    st.caption(
-        f"Available check-in dates: {coverage.start_date:%Y-%m-%d} "
-        f"to {coverage.end_date:%Y-%m-%d}. Recorded presets end at the latest available date."
-    )
-    if "forecast" in preset.casefold():
-        st.caption(
-            "Model estimates fill supported dates after recorded coverage. "
-            "ZIPs or dates without model weather inputs remain unavailable."
-        )
+    st.caption(f"{dates[0]:%d %b %Y} – {dates[1]:%d %b %Y}")
     return dates[0], dates[1]
 
 
-def _reset_area_selections(scope: tuple[str, str]) -> None:
+def _reset_area_selections(scope: tuple[str, str, str | None]) -> None:
     if st.session_state.get("area_scope") != scope:
         if st.session_state.get("area_scope") is not None:
             st.session_state["exploration_notice"] = (
-                "City or business category changed. Choose ZIP areas for a new comparison."
+                "Metro area, business category or source category changed. "
+                "Choose businesses for a new comparison."
             )
         st.session_state["compare_areas"] = []
+        st.session_state["business_compare_ids"] = []
+        st.session_state.pop("business_compare_scope", None)
+        st.session_state.pop("business_map_selected", None)
         st.session_state["reset_map_picks"] = True
         for key in (
             "map_area",
+            "map_business",
+            "pending_map_business",
             "pending_map_area",
             "location_last_map_pick",
             "location_table_notice",
@@ -140,9 +135,21 @@ def _reset_area_selections(scope: tuple[str, str]) -> None:
         st.session_state["area_scope"] = scope
 
 
-def _shared_filters(*, include_source_category: bool = False) -> tuple[Filters, Catalog, str]:
-    with st.sidebar:
-        st.subheader("Explore locations", icon=":material/tune:")
+def _scope_catalog(catalog: Catalog, source_category: str | None) -> Catalog:
+    """Keep the parent geography and weather context while restricting its businesses."""
+    if source_category is None:
+        return catalog
+    return replace(
+        catalog,
+        businesses=tuple(
+            business for business in catalog.businesses if source_category in business.categories
+        ),
+    )
+
+
+def _shared_filters(*, full_catalog: bool = False) -> tuple[Filters, Catalog, str]:
+    with st.sidebar, st.container(gap="xsmall"):
+        st.subheader("Filters", icon=":material/tune:")
         city = st.selectbox(
             "Metro area",
             [scope.city for scope in CITY_SCOPES],
@@ -165,48 +172,34 @@ def _shared_filters(*, include_source_category: bool = False) -> tuple[Filters, 
             key="category",
             persist_state="session",
         )
-        _reset_area_selections((city, category))
         catalog = _catalog(city, scope.state, category, revision)
-        if include_source_category:
-            source_categories = sorted(
-                {
-                    tag
-                    for business in catalog.businesses
-                    for tag in business.categories
-                    if tag != category
-                }
-            )
-            source_options = ["All source categories", *source_categories]
-            if (
-                st.session_state.get("business_source_scope") != (city, category)
-                or st.session_state.get("business_source_category") not in source_options
-            ):
-                st.session_state["business_source_category"] = source_options[0]
-                st.session_state["business_source_scope"] = (city, category)
-            st.selectbox(
-                "Source category",
-                source_options,
-                key="business_source_category",
-                persist_state="session",
-                help="Exact source label within the selected business category.",
-            )
+        source_categories = sorted(
+            {
+                tag
+                for business in catalog.businesses
+                for tag in business.categories
+                if tag != category
+            }
+        )
+        source_options = ["All source categories", *source_categories]
+        if (
+            st.session_state.get("business_source_scope") != (city, category)
+            or st.session_state.get("business_source_category") not in source_options
+        ):
+            st.session_state["business_source_category"] = source_options[0]
+            st.session_state["business_source_scope"] = (city, category)
+        selected_source = st.selectbox(
+            "Source category",
+            source_options,
+            key="business_source_category",
+            persist_state="session",
+            help="Exact source label within the selected business category.",
+        )
+        source_category = None if selected_source == source_options[0] else selected_source
+        _reset_area_selections((city, category, source_category))
         coverage = catalog.coverage
         dates = _screen_dates(coverage)
-        radius = float(st.session_state.get("radius_km", 1.0))
-        if not include_source_category:
-            radius = st.slider(
-                "Nearby-business radius (km)",
-                min_value=0.5,
-                max_value=5.0,
-                value=1.0,
-                step=0.5,
-                key="radius_km",
-                persist_state="session",
-                help=(
-                    "Changes nearby-category counts only. "
-                    "ZIP membership and activity stay the same."
-                ),
-            )
+        radius = 1.0
         with st.expander("About this data", expanded=False):
             st.markdown("**Yelp archive** · business listings and recorded check-ins")
             st.caption(
@@ -235,7 +228,18 @@ def _shared_filters(*, include_source_category: bool = False) -> tuple[Filters, 
             st.caption(
                 "Check-ins are an activity proxy. Weather observations do not prove causal effects."
             )
-    return Filters(city, scope.state, category, dates[0], dates[1], radius), catalog, revision
+            st.caption(
+                "The metro filter uses the imported city cohort. Source categories are exact "
+                "business tags and may overlap."
+            )
+            st.caption(
+                "The shared date range applies to all pages. Estimates appear only after "
+                "recorded coverage ends; covered days with no check-ins stay zero. "
+                "Estimates extrapolate archived patterns without later market changes or "
+                "future weather."
+            )
+    filters = Filters(city, scope.state, category, dates[0], dates[1], radius, source_category)
+    return filters, catalog if full_catalog else _scope_catalog(catalog, source_category), revision
 
 
 def _import_is_unchanged(revision: str) -> bool:
@@ -268,7 +272,9 @@ def render_app() -> None:
                 default=True,
             ),
             st.Page(
-                pages / "compare_sites.py", title="Compare sites", icon=":material/compare_arrows:"
+                pages / "compare_sites.py",
+                title="Compare businesses",
+                icon=":material/compare_arrows:",
             ),
             st.Page(
                 pages / "business_analysis.py",
@@ -281,28 +287,11 @@ def render_app() -> None:
     requested = st.session_state.pop("requested_exploration_page", None)
     if requested in ("location_map", "compare_sites"):
         st.switch_page(pages / f"{requested}.py")
-    st.title("SiteSense AI")
-    st.caption("Explore locations, activity, and weather.")
     st.header(page.title, icon=page.icon)
     try:
-        filters, catalog, revision = _shared_filters(
-            include_source_category=page.title == "Business analysis"
-        )
-        records: tuple[ActivityRecord, ...]
-        if (
-            page.title == "Business analysis"
-            or filters.end_date < catalog.coverage.start_date
-            or filters.start_date > catalog.coverage.end_date
-        ):
-            records = ()
-        else:
-            with st.spinner("Loading recorded activity…"):
-                records = _activity(filters, revision)
+        filters, catalog, revision = _shared_filters(full_catalog=page.title == "Business analysis")
         if not _import_is_unchanged(revision):
             return
-        summaries = (
-            () if page.title == "Business analysis" else summarize_areas(catalog, records, filters)
-        )
     except ConfigurationError:
         render_setup("configuration")
         return
@@ -315,30 +304,16 @@ def render_app() -> None:
     except psycopg.Error:
         render_setup("connection")
         return
-    st.session_state["screen_context"] = ScreenContext(
-        filters, catalog, records, summaries, revision
-    )
-    if page.title != "Business analysis":
-        exploration.prepare_comparison(summaries)
+    st.session_state["screen_context"] = ScreenContext(filters, catalog, (), (), revision)
     scope_caption = (
         f"{filters.city}, {filters.state} · {filters.category_label} · "
+        f"{filters.source_category or 'All source categories'} · "
         f"{filters.start_date:%Y-%m-%d} to {filters.end_date:%Y-%m-%d}"
     )
-    if page.title == "Business analysis":
-        scope_caption += f" · {st.session_state['business_source_category']}"
-    else:
-        scope_caption += f" · {filters.radius_km:.1f} km nearby radius"
     st.caption(scope_caption)
     if page.title != "Business analysis":
         if notice := st.session_state.pop("exploration_notice", None):
             st.info(notice)
-    if page.title == "Location map":
-        with st.container(border=True):
-            st.markdown("**Explore a ZIP, then compare your candidates.**")
-            st.caption(
-                "Inspect a ZIP on the map and add it to comparison, or select ZIPs in "
-                "Browse ZIP areas. Compare two to four areas with the same filters."
-            )
     page.run()
     if any(cell.source_kind == "acis_station" for cell in catalog.weather_cells):
         try:

@@ -16,6 +16,7 @@ from sitesense import (
     forecast_range,
     forecast_views,
     hourly_weather,
+    location_businesses,
     repository,
     scientific_views,
     ui,
@@ -26,6 +27,7 @@ from sitesense.location_weather import DailyWeather, load_daily_station_weather
 from sitesense.models import (
     ActivityRecord,
     AreaSummary,
+    Filters,
     StationWeatherSummary,
     WeatherCell,
 )
@@ -330,8 +332,7 @@ def _daily_weather(
 
 @st.cache_data(ttl=300, max_entries=16, show_spinner="Measuring rain-day changes…")
 def _rain_effects(
-    city: str,
-    category: str,
+    filters: Filters,
     start: date,
     end: date,
     level: str,
@@ -1139,8 +1140,18 @@ def _ensure_current_import(context: ui.ScreenContext) -> None:
 
 @st.fragment(key="location_map")
 def render_location_map() -> None:
+    from sitesense.niche_planning_views import planning_mode
+
+    raw_context = st.session_state.get("screen_context")
+    if isinstance(raw_context, ui.ScreenContext) and planning_mode(raw_context):
+        _ensure_current_import(raw_context)
+        return
     context = ui._context()
     if context is None:
+        raw_context = st.session_state.get("screen_context")
+        if isinstance(raw_context, ui.ScreenContext):
+            _ensure_current_import(raw_context)
+            location_businesses.render(raw_context)
         return
     _ensure_current_import(context)
     covered = ui._activity_coverage(context)
@@ -1149,6 +1160,11 @@ def render_location_map() -> None:
         "Explore activity and weather for the same ZIPs and dates. "
         "Forecasts cover supported dates after the recorded period."
     )
+    if context.filters.source_category:
+        st.caption(
+            f"All ZIP totals, listed-business counts and competitor listings use "
+            f"{context.filters.category_label} → {context.filters.source_category}."
+        )
     ui._activity_coverage_notice(context, covered, estimates)
     has_estimates = bool(estimates.estimated_dates)
     if has_estimates:
@@ -1240,8 +1256,7 @@ def render_location_map() -> None:
                     )
                 )
             effects = _rain_effects(
-                context.filters.city,
-                context.filters.category,
+                context.filters,
                 start,
                 end,
                 level,
@@ -1294,6 +1309,7 @@ def render_location_map() -> None:
         selected = _render_selected_zip(context, ranked, features, metric, estimates=estimates)
     exploration.render_comparison_selection(context.summaries)
     _render_ranking(context, ranked, base, metric, estimates=estimates)
+    location_businesses.render(context, selected.area.id)
     _render_time_panels(context, selected, stations, start, end)
     _render_scientific_analysis(context)
     _ensure_current_import(context)
@@ -1445,6 +1461,7 @@ def _render_estimated_map(
         estimates=estimates,
         forecast_mode=True,
     )
+    location_businesses.render(context, selected.area.id)
     _render_activity_weather_chart(context, selected, estimates)
 
 
@@ -1562,7 +1579,7 @@ def _render_unavailable_map(
         st.subheader("Candidate ZIP areas")
         _render_map(features, [], NO_FILL, None, "", activity_available=False)
     with right:
-        _render_selected_zip(
+        selected = _render_selected_zip(
             context,
             ranked,
             features,
@@ -1572,3 +1589,4 @@ def _render_unavailable_map(
         )
     exploration.render_comparison_selection(context.summaries)
     _render_ranking(context, ranked, base, NO_FILL, activity_available=False, estimates=estimates)
+    location_businesses.render(context, selected.area.id)

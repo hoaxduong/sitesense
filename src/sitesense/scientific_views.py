@@ -444,10 +444,20 @@ def render(context: "ScreenContext", area_ids: tuple[int, ...], key: str) -> Non
         if not areas:
             st.info("Select a ZIP to analyze.")
             return
+        families = (
+            tuple(CHARTS) if context.filters.source_category is None else ("Weather patterns",)
+        )
+        if st.session_state.get("science_family") not in families:
+            st.session_state["science_family"] = families[0]
+        if context.filters.source_category is not None:
+            st.caption(
+                "Recorded patterns use the selected source category. Broad-sector model "
+                "diagnostics and weather response do not apply to this niche."
+            )
         family = str(
             st.segmented_control(
                 "Analysis",
-                tuple(CHARTS),
+                families,
                 default="Weather patterns",
                 required=True,
                 key="science_family",
@@ -533,7 +543,14 @@ def render(context: "ScreenContext", area_ids: tuple[int, ...], key: str) -> Non
                     "These are descriptive associations, not causal weather effects."
                 )
             # Keep original daily inputs available for reproducibility, including missing weather.
-            _download([dict(row, Kind="Recorded input") for row in rows] + result, key, chart)
+            _download(
+                [
+                    dict(row, **{"Source category": context.filters.source_category or "All"})
+                    for row in [dict(row, Kind="Recorded input") for row in rows] + result
+                ],
+                key,
+                chart,
+            )
         elif chart == "Weather response (ICE)":
             variable = {
                 "Precipitation": "precip_mm",

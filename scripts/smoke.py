@@ -69,12 +69,11 @@ def main() -> None:
                 app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
                 for page, title in (
                     ("location_map", "Location map"),
-                    ("compare_sites", "Compare sites"),
+                    ("compare_sites", "Compare businesses"),
                     ("business_analysis", "Business analysis"),
                 ):
                     app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
                     assert not app.exception, [error.message for error in app.exception]
-                    assert app.title[0].value == "SiteSense AI"
                     assert app.header[0].value == title
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric

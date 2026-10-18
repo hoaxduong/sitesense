@@ -86,7 +86,12 @@ def _activity_forecast(context: ScreenContext) -> forecast_range.ForecastRange:
     areas = tuple(summary.area for summary in context.summaries)
     reason = None
     if uncovered_days:
-        if context.filters.end_date <= context.catalog.coverage.end_date:
+        if context.filters.source_category is not None:
+            reason = (
+                "The broad-sector weather model does not estimate source categories. "
+                "Use Future planning on Location map for niche calendar scenarios."
+            )
+        elif context.filters.end_date <= context.catalog.coverage.end_date:
             reason = "Dates before recorded coverage are not forecast periods."
         else:
             try:
@@ -144,6 +149,10 @@ def _cohort_activity(
     context: ScreenContext,
 ) -> tuple[forecast_cohort.CohortReference, tuple[ActivityRecord, ...] | None]:
     """A failed query is unavailable, never a valid zero-activity cohort."""
+    if context.filters.source_category is not None:
+        return forecast_cohort.CohortReference(
+            (), "Broad-sector model cohorts do not represent the selected source category."
+        ), None
     covered = _activity_coverage(context)
     if covered is None:
         return forecast_cohort.CohortReference(()), None
@@ -215,7 +224,7 @@ def _context() -> ScreenContext | None:
     if not context.summaries:
         st.info(
             "No candidate ZIP areas qualify. A candidate needs at least five listed businesses "
-            "in the selected category. Try another city or category."
+            "in the selected category and source category. Try another selection."
         )
         return None
     return context
@@ -339,6 +348,7 @@ def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: s
         "city": context.filters.city,
         "state": context.filters.state,
         "category": context.filters.category,
+        "source_category": context.filters.source_category or "All source categories",
         "period_start": context.filters.start_date,
         "period_end": context.filters.end_date,
         "activity_coverage_start": covered[0] if covered else None,
