@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date
 from statistics import mean
 
+from sitesense.business_analysis import BusinessActivity, BusinessMonth
+from sitesense.business_weather import BusinessDay
 from sitesense.database import connect
 from sitesense.models import (
     ActivityRecord,
@@ -233,6 +235,105 @@ def load_activity(
             parameters,
         ).fetchall()
     return tuple(ActivityRecord(*row) for row in rows)
+
+
+def load_business_activity(filters: Filters) -> tuple[BusinessActivity, ...]:
+    """Read business totals for the exact parent category and selected dates.
+
+    Businesses with no recorded buckets are absent. The catalog provides the
+    full inventory for callers to retain those businesses with zero activity.
+    """
+    if filters.end_date < filters.start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT b.business_id, sum(a.checkin_count),
+                      count(DISTINCT a.activity_date),
+                      COALESCE(sum(a.checkin_count) FILTER (
+                          WHERE extract(isodow FROM a.activity_date) IN (6, 7)
+                      ), 0)
+               FROM sitesense.business_activity_hourly AS a
+               JOIN sitesense.businesses AS b USING (business_id)
+               WHERE b.canonical_city = %s AND b.canonical_state = %s
+                 AND b.categories @> ARRAY[%s]::text[]
+                 AND a.activity_date BETWEEN %s AND %s
+               GROUP BY b.business_id ORDER BY b.business_id""",
+            (
+                filters.city,
+                filters.state,
+                filters.category,
+                filters.start_date,
+                filters.end_date,
+            ),
+        ).fetchall()
+    return tuple(BusinessActivity(*row) for row in rows)
+
+
+def load_business_monthly(
+    filters: Filters, business_ids: tuple[str, ...]
+) -> tuple[BusinessMonth, ...]:
+    """Read sparse monthly counts for up to four businesses in the exact scope.
+
+    Month labels are calendar starts; boundary months still include only the
+    selected days. Callers fill covered zero months from the same date bounds.
+    """
+    if filters.end_date < filters.start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    if len(business_ids) > 4:
+        raise ValueError("Compare up to four businesses.")
+    if not business_ids:
+        return ()
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT b.business_id, date_trunc('month', a.activity_date)::date,
+                      sum(a.checkin_count)
+               FROM sitesense.business_activity_hourly AS a
+               JOIN sitesense.businesses AS b USING (business_id)
+               WHERE b.canonical_city = %s AND b.canonical_state = %s
+                 AND b.categories @> ARRAY[%s]::text[]
+                 AND a.activity_date BETWEEN %s AND %s
+                 AND b.business_id = ANY(%s::text[])
+               GROUP BY b.business_id, date_trunc('month', a.activity_date)::date
+               ORDER BY b.business_id, date_trunc('month', a.activity_date)::date""",
+            (
+                filters.city,
+                filters.state,
+                filters.category,
+                filters.start_date,
+                filters.end_date,
+                list(business_ids),
+            ),
+        ).fetchall()
+    return tuple(BusinessMonth(*row) for row in rows)
+
+
+def load_business_daily(filters: Filters, business_id: str) -> tuple[BusinessDay, ...]:
+    """Read sparse daily activity for one exact business within the parent scope."""
+    if filters.end_date < filters.start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    if not business_id:
+        return ()
+    with connect() as connection:
+        rows = connection.execute(
+            """SELECT b.business_id, a.activity_date, sum(a.checkin_count)
+               FROM sitesense.business_activity_hourly AS a
+               JOIN sitesense.businesses AS b USING (business_id)
+               WHERE b.canonical_city = %s AND b.canonical_state = %s
+                 AND b.categories @> ARRAY[%s]::text[]
+                 AND a.activity_date BETWEEN %s AND %s
+                 AND b.business_id = %s
+               GROUP BY b.business_id, a.activity_date
+               ORDER BY a.activity_date""",
+            (
+                filters.city,
+                filters.state,
+                filters.category,
+                filters.start_date,
+                filters.end_date,
+                business_id,
+            ),
+        ).fetchall()
+    return tuple(BusinessDay(*row) for row in rows)
 
 
 @dataclass(frozen=True)
