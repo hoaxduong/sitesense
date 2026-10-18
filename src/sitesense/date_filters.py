@@ -4,13 +4,38 @@ from datetime import date
 
 from sitesense.models import DateCoverage
 
-DATE_PRESETS = ("7 days", "30 days", "90 days", "1 year", "All data", "Custom")
-PRESET_DAYS = {"7 days": 7, "30 days": 30, "90 days": 90, "1 year": 365}
+OVERVIEW = "Recorded activity overview"
+CUSTOM = "Custom range"
+DATE_PRESETS = (
+    OVERVIEW,
+    "Seasonal patterns",
+    "History → forecast preview",
+    "Forecast period preview",
+    "Latest recorded 7 days",
+    "Latest recorded 30 days",
+    "Latest recorded 90 days",
+    CUSTOM,
+)
+PRESET_DAYS = {
+    OVERVIEW: 365,
+    "Latest recorded 7 days": 7,
+    "Latest recorded 30 days": 30,
+    "Latest recorded 90 days": 90,
+}
 
 
 def preset_range(preset: str, coverage: DateCoverage) -> tuple[date, date]:
-    if preset == "All data":
+    if preset == "Seasonal patterns":
         return coverage.start_date, coverage.end_date
+    if preset in ("History → forecast preview", "Forecast period preview"):
+        end = date.fromordinal(min(date.max.toordinal(), coverage.end_date.toordinal() + 7))
+        if preset == "Forecast period preview":
+            start = date.fromordinal(min(date.max.toordinal(), coverage.end_date.toordinal() + 1))
+        else:
+            start = date.fromordinal(
+                max(coverage.start_date.toordinal(), coverage.end_date.toordinal() - 29)
+            )
+        return start, end
     days = PRESET_DAYS[preset]
     # Date ordinals keep this safe even for coverage beginning at date.min.
     start = date.fromordinal(
@@ -20,6 +45,4 @@ def preset_range(preset: str, coverage: DateCoverage) -> tuple[date, date]:
 
 
 def default_activity_range(coverage: DateCoverage) -> tuple[date, date]:
-    start = max(coverage.start_date, date(2015, 1, 1))
-    end = min(coverage.end_date, date(2021, 12, 31))
-    return (start, end) if start <= end else (coverage.start_date, coverage.end_date)
+    return preset_range(OVERVIEW, coverage)

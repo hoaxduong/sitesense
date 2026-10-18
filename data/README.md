@@ -102,6 +102,22 @@ The app verifies the bundle before loading it and never trains or reads activity
 
 Reports and model artifacts stay local and are ignored by Git. A fresh checkout or deployment must run notebook 04 or receive its complete trusted bundle at the expected model path. Run the local app from the repository root; the container expects `/app/models/location_forecast/`. Match the recorded runtime package versions when transferring artifacts; incompatible or incomplete bundles show setup guidance in the UI.
 
+To connect recorded activity and forecasts on the same map-chart axis, prepare the exact
+original cohort reference from the completed run that produced the installed bundle:
+
+```sh
+uv run --frozen python scripts/prepare_forecast_cohort.py \
+  --run-directory data/processed/full_history_forecast/run_20261013T140844558781Z
+```
+
+This verifies the run's source and artifact hashes against the current bundle, then copies
+`final_cohort.csv`, `final_areas.csv`, and the parent manifest into
+`models/location_forecast/cohort/`. Transfer this small directory with the model bundle.
+The app queries recorded activity for those exact members and uses the original denominator;
+it never uses snapshot business counts. Missing or changed members invalidate their ZIP's
+normalization. Missing references keep the count and rate axes separate. Preparation does
+not retrain or alter model weights.
+
 ## Local files and reruns
 
 Use the same layout for both datasets: `data/downloads/` holds cached archives, `data/raw/<dataset>/` holds source tables used by the importer, and `data/processed/<dataset>/` holds exploration results and executed notebooks. Local dataset names are `yelp` and `climate`; the Drive archive names in the source links remain unchanged.

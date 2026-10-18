@@ -15,8 +15,6 @@ from streamlit.testing.v1 import AppTest
 from sitesense import forecast, repository
 from sitesense.forecast_ui import _artifact_revision, _forecast_bundle
 
-APP_FILE = Path(__file__).resolve().parents[1] / "app.py"
-
 
 @pytest.fixture(autouse=True)
 def forecast_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,15 +90,20 @@ def bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> forecast.Forecast
     return result
 
 
+def _forecast_component() -> None:
+    from sitesense.forecast_ui import render_forecast
+
+    render_forecast()
+
+
 def _app(monkeypatch: pytest.MonkeyPatch) -> AppTest:
-    app = AppTest.from_file(str(APP_FILE), default_timeout=15).run()
 
     def database_not_used(*args: object, **kwargs: object) -> None:
-        pytest.fail("Forecast page must not query the database")
+        pytest.fail("Forecast component must not query the database")
 
     for name in ("get_import_revision", "load_catalog", "load_activity", "list_categories"):
         monkeypatch.setattr(repository, name, database_not_used)
-    app.switch_page("src/sitesense/app_pages/demand_forecast.py").run()
+    app = AppTest.from_function(_forecast_component, default_timeout=15).run()
     assert not app.exception
     return app
 

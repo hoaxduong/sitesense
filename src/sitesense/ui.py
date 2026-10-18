@@ -2,15 +2,26 @@
 
 import csv
 import io
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import date
+from pathlib import Path
 from statistics import mean
 from typing import Any, cast
 
 import psycopg
 import streamlit as st
 
-from sitesense import repository, zip_boundaries
+from sitesense import (
+    exploration,
+    forecast,
+    forecast_cohort,
+    forecast_range,
+    forecast_ui,
+    forecast_views,
+    repository,
+    zip_boundaries,
+)
 from sitesense.analytics import haversine_km, summarize_activity
 from sitesense.database import ConfigurationError
 from sitesense.models import (
@@ -18,7 +29,9 @@ from sitesense.models import (
     ActivitySummary,
     AreaSummary,
     Business,
+    CandidateArea,
     Catalog,
+    DateCoverage,
     Filters,
     StationWeatherMonth,
     StationWeatherSummary,
@@ -41,6 +54,112 @@ class ScreenContext:
     records: tuple[ActivityRecord, ...]
     summaries: tuple[AreaSummary, ...]
     import_revision: str = ""
+
+
+@st.cache_data(ttl=300, max_entries=32, show_spinner="Generating forecasts…")
+def _forecast_estimates(
+    city: str,
+    state: str,
+    category: str,
+    start: date,
+    end: date,
+    coverage: DateCoverage,
+    areas: tuple[CandidateArea, ...],
+    import_revision: str,
+    artifact_revision: str,
+    directory: str,
+) -> forecast_range.ForecastRange:
+    bundle = forecast_ui._forecast_bundle(directory, artifact_revision)
+    return forecast_range.predict_range(
+        bundle, Filters(city, state, category, start, end), coverage, areas
+    )
+
+
+def _activity_forecast(context: ScreenContext) -> forecast_range.ForecastRange:
+    """Resolve uncovered dates once per scope/model, independently of the focused ZIP."""
+    covered = _activity_coverage(context)
+    recorded_days = (covered[1] - covered[0]).days + 1 if covered else 0
+    uncovered_days = (
+        (context.filters.end_date - context.filters.start_date).days + 1 - recorded_days
+    )
+    areas = tuple(summary.area for summary in context.summaries)
+    reason = None
+    if uncovered_days:
+        if context.filters.end_date <= context.catalog.coverage.end_date:
+            reason = "Dates before recorded coverage are not forecast periods."
+        else:
+            try:
+                revision = forecast_ui._artifact_revision(forecast.MODEL_DIR)
+                return _forecast_estimates(
+                    context.filters.city,
+                    context.filters.state,
+                    context.filters.category,
+                    context.filters.start_date,
+                    context.filters.end_date,
+                    context.catalog.coverage,
+                    areas,
+                    context.import_revision,
+                    revision,
+                    str(forecast.MODEL_DIR),
+                )
+            except forecast.ArtifactUnavailableError:
+                reason = "Forecast model unavailable."
+    return forecast_range.ForecastRange(
+        tuple(forecast_range.AreaForecast(area.id, (), uncovered_days, reason) for area in areas),
+        uncovered_days,
+        reason=reason,
+    )
+
+
+@st.cache_data(ttl=300, max_entries=32, show_spinner="Loading comparable activity…")
+def _recorded_cohort_activity(
+    city: str,
+    state: str,
+    category: str,
+    start: date,
+    end: date,
+    areas: tuple[CandidateArea, ...],
+    import_revision: str,
+    reference_revision: str,
+    directory: str,
+    _catalog: Catalog,
+) -> tuple[forecast_cohort.CohortReference, tuple[ActivityRecord, ...] | None]:
+    """Load one exact model cohort per scope, independently of the focused ZIP.
+
+    The import revision identifies the catalog; excluding its large contents from
+    hashing keeps map interactions cheap without reusing a different import.
+    """
+    filters = Filters(city, state, category, start, end)
+    reference = forecast_cohort.load_reference(Path(directory), filters, _catalog, areas)
+    if not reference.business_ids:
+        return reference, None
+    records = repository.load_activity(
+        filters, include_previous_year=False, business_ids=reference.business_ids
+    )
+    return reference, records
+
+
+def _cohort_activity(
+    context: ScreenContext,
+) -> tuple[forecast_cohort.CohortReference, tuple[ActivityRecord, ...] | None]:
+    """A failed query is unavailable, never a valid zero-activity cohort."""
+    covered = _activity_coverage(context)
+    if covered is None:
+        return forecast_cohort.CohortReference(()), None
+    try:
+        return _recorded_cohort_activity(
+            context.filters.city,
+            context.filters.state,
+            context.filters.category,
+            *covered,
+            tuple(summary.area for summary in context.summaries),
+            context.import_revision,
+            forecast_cohort.artifact_revision(forecast.MODEL_DIR),
+            str(forecast.MODEL_DIR),
+            context.catalog,
+        )
+    except (ConfigurationError, psycopg.Error):
+        return forecast_cohort.CohortReference(()), None
 
 
 @st.cache_data(ttl=300, max_entries=32, show_spinner=False)
@@ -101,12 +220,21 @@ def _context() -> ScreenContext | None:
     return context
 
 
-def _selected_area(context: ScreenContext, key: str) -> AreaSummary:
+def _selected_area(
+    context: ScreenContext, key: str, *, on_change: Callable[[], None] | None = None
+) -> AreaSummary:
     ids = [summary.area.id for summary in context.summaries]
     labels = {summary.area.id: summary.area.label for summary in context.summaries}
     if st.session_state.get(key) not in ids:
         st.session_state[key] = ids[0]
-    area_id = st.selectbox("ZIP area", ids, format_func=labels.__getitem__, key=key)
+    area_id = st.selectbox(
+        "ZIP area",
+        ids,
+        format_func=labels.__getitem__,
+        key=key,
+        persist_state="session",
+        on_change=on_change,
+    )
     return next(summary for summary in context.summaries if summary.area.id == area_id)
 
 
@@ -128,13 +256,50 @@ def _activity_coverage(context: ScreenContext) -> tuple[date, date] | None:
     return (start, end) if start <= end else None
 
 
-def _activity_coverage_notice(context: ScreenContext, covered: tuple[date, date] | None) -> None:
+def _activity_coverage_notice(
+    context: ScreenContext,
+    covered: tuple[date, date] | None,
+    estimates: forecast_range.ForecastRange | None = None,
+) -> None:
+    selected_days = (context.filters.end_date - context.filters.start_date).days + 1
+    if estimates is not None and estimates.uncovered_days:
+        recorded_days = (covered[1] - covered[0]).days + 1 if covered else 0
+        supported = sum(bool(area.points) for area in estimates.areas)
+        if supported:
+            st.info(
+                f"Recorded activity: {recorded_days:,} days. Model estimates cover "
+                f"{len(estimates.estimated_dates):,} additional dates for "
+                f"{supported} of {len(estimates.areas)} ZIPs. "
+                "Forecast coverage varies by ZIP; missing days remain unavailable."
+            )
+            st.caption(
+                "Forecasts show estimated check-ins per 100 historical cohort businesses per day. "
+                "Recorded activity is a total check-in count. "
+                "Estimates use observed station weather for the target dates."
+            )
+        else:
+            reasons = {area.reason for area in estimates.areas if area.reason}
+            detail = estimates.reason or (next(iter(reasons)) if len(reasons) == 1 else None)
+            st.info(
+                f"Recorded: {recorded_days:,} days; estimated: 0 days; "
+                f"unavailable: {selected_days - recorded_days:,} days. "
+                + (detail or "No supported forecast is available for these dates and ZIPs.")
+            )
+        return
     if covered is None:
-        st.info("No imported activity covers the selected date range.")
+        st.info(
+            "No imported activity covers the selected date range. "
+            f"Recorded: 0 days; estimated: 0 days; unavailable: {selected_days:,} days. "
+            "Forecast estimates have not been generated. Business snapshots remain available."
+        )
     elif covered != (context.filters.start_date, context.filters.end_date):
-        st.caption(
+        recorded_days = (covered[1] - covered[0]).days + 1
+        st.info(
             f"Imported activity covers {covered[0]:%Y-%m-%d} to {covered[1]:%Y-%m-%d} "
-            "within this selection. There is no activity coverage outside those dates."
+            f"within this selection. Recorded: {recorded_days:,} days; estimated: 0 days; "
+            f"unavailable: {selected_days - recorded_days:,} days. "
+            "Forecast estimates have not been generated for uncovered dates. "
+            "Activity metrics use only the recorded portion."
         )
 
 
@@ -167,6 +332,8 @@ def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: s
     if not rows:
         return
     covered = _activity_coverage(context)
+    selected_days = (context.filters.end_date - context.filters.start_date).days + 1
+    recorded_days = (covered[1] - covered[0]).days + 1 if covered else 0
     scope: dict[str, object] = {
         "city": context.filters.city,
         "state": context.filters.state,
@@ -175,11 +342,19 @@ def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: s
         "period_end": context.filters.end_date,
         "activity_coverage_start": covered[0] if covered else None,
         "activity_coverage_end": covered[1] if covered else None,
+        "activity_recorded_days": recorded_days,
+        "activity_estimated_days": 0,
+        "activity_unavailable_days": selected_days - recorded_days,
         "radius_km": context.filters.radius_km,
         "checkin_timestamp_policy": context.catalog.coverage.timestamp_policy,
         "data_source": "Imported Yelp archive; business snapshot; check-ins are an activity proxy",
     }
-    exports = _available_columns([dict(scope, **row) for row in rows])
+    if any(row.get("forecast_estimated_days", 0) for row in rows):
+        scope["data_source"] = (
+            str(scope["data_source"]) + "; model estimates are historical-cohort daily rates "
+            "conditioned on observed station weather"
+        )
+    exports = [dict(scope, **row) for row in rows]
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=list(exports[0]))
     writer.writeheader()
@@ -196,7 +371,7 @@ def _csv_download(rows: list[dict[str, object]], context: ScreenContext, name: s
 
 def _area_export(summary: AreaSummary, context: ScreenContext) -> dict[str, object]:
     covered = _activity_coverage(context)
-    return {
+    result: dict[str, object] = {
         "area_id": summary.area.id,
         "postal_code": summary.area.postal_code,
         "area_label": summary.area.display_name,
@@ -220,6 +395,14 @@ def _area_export(summary: AreaSummary, context: ScreenContext) -> dict[str, obje
             summary.weather_match_rate if context.catalog.weather_cells else None
         ),
     }
+    estimates = _activity_forecast(context)
+    if estimates.uncovered_days:
+        area = estimates.by_area.get(summary.area.id)
+        estimated_days = area.estimated_days if area else 0
+        result.update(forecast_views.forecast_export(estimates, summary.area.id))
+        result["activity_estimated_days"] = estimated_days
+        result["activity_unavailable_days"] = estimates.uncovered_days - estimated_days
+    return result
 
 
 def _indicator_row(summary: AreaSummary, context: ScreenContext) -> dict[str, object]:
@@ -955,26 +1138,43 @@ def render_forecast() -> None:
 
 
 def render_comparison() -> None:
+    st.button(
+        "Back to Location map",
+        icon=":material/arrow_back:",
+        key="comparison_back_map",
+        on_click=exploration.open_map,
+    )
+    st.caption(
+        "Compare the same areas, dates, business category, and radius as Location map. "
+        "Choose two to four ZIP areas here, or add them from the map."
+    )
     context = _context()
     if context is None:
         return
     covered = _activity_coverage(context)
-    _activity_coverage_notice(context, covered)
+    estimates = _activity_forecast(context)
     options = [summary.area.id for summary in context.summaries]
     labels = {summary.area.id: summary.area.label for summary in context.summaries}
-    if "compare_areas" not in st.session_state:
-        st.session_state["compare_areas"] = options[:3]
     selected_ids = st.multiselect(
         "Compare two to four areas",
         options,
         format_func=labels.__getitem__,
         key="compare_areas",
         max_selections=4,
+        persist_state="session",
     )
     if len(selected_ids) < 2:
-        st.info("Select at least two eligible ZIP areas to compare.")
+        st.info(
+            "Add one more eligible ZIP area to compare. You can also choose areas on Location map."
+            if selected_ids
+            else "Select two to four eligible ZIP areas to compare, or add them from Location map."
+        )
         return
     selected = [summary for summary in context.summaries if summary.area.id in selected_ids]
+    selected_estimates = replace(
+        estimates, areas=tuple(area for area in estimates.areas if area.area_id in selected_ids)
+    )
+    _activity_coverage_notice(context, covered, selected_estimates)
     activity = (
         {summary.area.id: _activity_summary(context, summary) for summary in selected}
         if covered
@@ -983,6 +1183,8 @@ def render_comparison() -> None:
     st.caption(
         "Compare activity and business snapshots across ZIP areas."
         if covered
+        else "Compare forecast rates, coverage, and business snapshots across ZIP areas."
+        if selected_estimates.estimated_dates
         else "Compare business snapshots across ZIP areas."
     )
     shortlist = _comparison_shortlist(selected, covered)
@@ -1029,6 +1231,11 @@ def render_comparison() -> None:
             "No single area leads this comparison. The selected areas are tied after "
             "activity, snapshot rating, and listed-business count."
         )
+    elif selected_estimates.estimated_dates:
+        st.caption(
+            "Compare model rates and their coverage below. "
+            "Forecasts describe the historical business cohort, not total visits or revenue."
+        )
     else:
         st.info(
             "No area is shortlisted because the selected dates have no imported activity. "
@@ -1036,7 +1243,7 @@ def render_comparison() -> None:
         )
     with st.container(horizontal=True):
         for summary in selected:
-            with st.container(border=True, width=270):
+            with st.container(border=True, width="stretch"):
                 st.subheader(summary.area.label)
                 if shortlist is summary:
                     st.badge(
@@ -1049,11 +1256,23 @@ def render_comparison() -> None:
                 elif rating_leader is summary:
                     st.badge("Highest rating", icon=":material/star:", color="yellow")
                 if covered:
-                    st.metric("Weekly check-ins", _number(summary.average_weekly_checkins))
+                    if estimates.uncovered_days:
+                        recorded_days = (covered[1] - covered[0]).days + 1
+                        st.metric(
+                            "Recorded / day",
+                            _number(summary.checkin_count / recorded_days),
+                            help="Daily recorded check-ins for the entire ZIP, including zeros.",
+                        )
+                        st.caption(f"Entire ZIP · {recorded_days} recorded days.")
+                    else:
+                        st.metric("Weekly check-ins", _number(summary.average_weekly_checkins))
                     st.markdown(f"**{summary.checkin_count:,}** recorded check-ins")
                     st.markdown(f"**{summary.business_count:,}** listed category businesses")
                 else:
                     st.metric("Listed category businesses", f"{summary.business_count:,}")
+                forecast_views.render_area_forecast(
+                    selected_estimates, summary.area.id, heading=False
+                )
                 if summary.average_rating is not None:
                     st.metric("Average rating", f"{_number(summary.average_rating)} ★")
                     st.caption(
@@ -1062,8 +1281,30 @@ def render_comparison() -> None:
                     )
                 if covered and summary.yoy_percent is not None:
                     st.caption(f"YoY daily activity: {_percent(summary.yoy_percent)}")
+                st.button(
+                    "View on map",
+                    icon=":material/map:",
+                    key=f"comparison_view_{summary.area.id}",
+                    on_click=exploration.open_map,
+                    args=(summary.area.id,),
+                )
+                st.button(
+                    "Remove from comparison",
+                    icon=":material/close:",
+                    key=f"comparison_remove_{summary.area.id}",
+                    on_click=exploration.toggle_comparison,
+                    args=(summary.area.id,),
+                )
     with st.container(border=True):
-        st.subheader("Recorded indicators" if covered else "Business snapshot indicators")
+        st.subheader(
+            "Activity and forecast indicators"
+            if estimates.uncovered_days and covered
+            else "Forecast and snapshot indicators"
+            if selected_estimates.estimated_dates
+            else "Recorded indicators"
+            if covered
+            else "Business snapshot indicators"
+        )
         rows = []
         for summary in selected:
             item = activity.get(summary.area.id)
@@ -1087,11 +1328,33 @@ def render_comparison() -> None:
                     ),
                 }
             )
+            if estimates.uncovered_days:
+                area = estimates.by_area.get(summary.area.id)
+                rows[-1].update(
+                    {
+                        "Forecast check-ins": (
+                            round(area.mean_rate * 100, 1)
+                            if area and area.mean_rate is not None
+                            else None
+                        ),
+                        "Forecast days": area.estimated_days if area else 0,
+                        "Unavailable forecast days": (
+                            area.unavailable_days if area else estimates.uncovered_days
+                        ),
+                    }
+                )
         st.dataframe(
             _available_columns(rows),
             hide_index=True,
+            column_config={
+                "Forecast check-ins": st.column_config.NumberColumn(
+                    "Forecast / 100 / day", format="%.1f", help=forecast_views.DISPLAY_RATE_UNIT
+                ),
+            },
             alt=(
-                "Recorded activity and snapshot indicators across selected ZIP areas"
+                "Forecast check-ins per 100 businesses per day, coverage, and snapshot indicators"
+                if selected_estimates.estimated_dates
+                else "Recorded activity and snapshot indicators across selected ZIP areas"
                 if covered
                 else "Imported business snapshot indicators across selected ZIP areas"
             ),
@@ -1100,25 +1363,54 @@ def render_comparison() -> None:
             "Nearby counts use the selected radius around each representative area center. "
             "Ratings and business counts describe the source snapshot."
         )
-    monthly = [
-        row
-        for summary in selected
-        if covered
-        for row in _monthly_rows(activity[summary.area.id], summary.area.label)
-    ]
-    if monthly:
-        with st.container(border=True):
-            st.subheader("Monthly activity comparison")
-            st.line_chart(
-                monthly,
-                x="Month",
-                y="Activity index",
-                color="Area",
-                alt="Recorded monthly activity indices for the compared ZIP areas",
-            )
+        if selected_estimates.estimated_dates:
             st.caption(
-                "Index 100 = each area's mean daily activity in this interval. Monthly rates use "
-                "covered calendar days, not just days with check-ins; undefined indices "
-                "are omitted."
+                f"Forecast: {forecast_views.DISPLAY_RATE_UNIT}. "
+                "Mean rates use each ZIP's available estimated days; check coverage when comparing."
             )
+    if selected_estimates.estimated_dates:
+        cohort, cohort_records = _cohort_activity(context)
+        forecast_views.render_activity_forecast_comparison(
+            selected_estimates,
+            tuple(selected_ids),
+            labels,
+            context.records,
+            covered,
+            context.filters.start_date,
+            context.filters.end_date,
+            cohort_records=cohort_records,
+            cohort_businesses=cohort.denominators,
+        )
+    else:
+        monthly = [
+            row
+            for summary in selected
+            if covered
+            for row in _monthly_rows(activity[summary.area.id], summary.area.label)
+        ]
+        if monthly:
+            with st.container(border=True):
+                st.subheader("Monthly activity comparison")
+                st.vega_lite_chart(
+                    monthly,
+                    {
+                        "mark": {"type": "line", "interpolate": "monotone"},
+                        "encoding": {
+                            "x": {"field": "Month", "type": "ordinal", "sort": "ascending"},
+                            "y": {"field": "Activity index", "type": "quantitative"},
+                            "color": {"field": "Area", "type": "nominal"},
+                            "tooltip": [
+                                {"field": "Month"},
+                                {"field": "Area"},
+                                {"field": "Activity index", "format": ".1f"},
+                            ],
+                        },
+                    },
+                    alt="Recorded monthly activity indices for the compared ZIP areas",
+                )
+                st.caption(
+                    "Index 100 = each area's mean daily activity in this interval. "
+                    "Monthly rates use covered calendar days, not just days with check-ins; "
+                    "undefined indices are omitted."
+                )
     _csv_download([_area_export(summary, context) for summary in selected], context, "comparison")

@@ -68,9 +68,7 @@ def main() -> None:
                 os.environ.pop("DATABASE_URL", None)
                 app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=10).run()
                 for page, title in (
-                    ("site_ranking", "Site ranking"),
-                    ("customer_activity", "Customer activity"),
-                    ("weather_impact", "Weather observations"),
+                    ("location_map", "Location map"),
                     ("compare_sites", "Compare sites"),
                 ):
                     app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
@@ -79,20 +77,8 @@ def main() -> None:
                     assert app.header[0].value == title
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric
-                app.switch_page("src/sitesense/app_pages/demand_forecast.py").run()
-                assert not app.exception, [error.message for error in app.exception]
-                assert app.title[0].value == "Demand forecast"
-                if any(button.label == "Predict" for button in app.button):
-                    app.button(key="forecast_predict").click().run()
-                    assert not app.exception, [error.message for error in app.exception]
-                    assert app.metric
-                    assert app.dataframe
-                else:
-                    assert app.info[0].value == "Forecast model unavailable"
             assert process.poll() is None
-            print(
-                "Smoke passed: Streamlit server, four historical pages, forecast, and safe setup."
-            )
+            print("Smoke passed: Streamlit server, Location map, Compare sites, and safe setup.")
         finally:
             process.terminate()
             try:

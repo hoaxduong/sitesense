@@ -189,13 +189,34 @@ def load_catalog(city: str, state: str, category: str) -> Catalog:
 
 
 def load_activity(
-    filters: Filters, include_previous_year: bool = True
+    filters: Filters,
+    include_previous_year: bool = True,
+    *,
+    business_ids: tuple[str, ...] | None = None,
 ) -> tuple[ActivityRecord, ...]:
-    """Return city/category counts; area 0 retains unusable ZIPs in city denominators."""
+    """Return city/category counts, optionally restricted to exact cohort members.
+
+    Area 0 retains unusable ZIPs in city denominators. An empty cohort means no
+    activity, while None preserves the unrestricted current screen behavior.
+    """
     if filters.end_date < filters.start_date:
         raise ValueError("The end date must be on or after the start date.")
+    if business_ids == ():
+        return ()
     start = previous_year(filters.start_date) if include_previous_year else filters.start_date
     end = previous_year(filters.end_date) if include_previous_year else filters.end_date
+    member_condition = " AND b.business_id = ANY(%s::text[])" if business_ids is not None else ""
+    parameters: tuple[object, ...] = (
+        filters.city,
+        filters.state,
+        filters.category,
+        filters.start_date,
+        filters.end_date,
+        start,
+        end,
+    )
+    if business_ids is not None:
+        parameters += (list(business_ids),)
     with connect() as connection:
         rows = connection.execute(
             """SELECT COALESCE(b.area_id, 0), a.activity_date, a.hour_of_day,
@@ -205,18 +226,11 @@ def load_activity(
                WHERE b.canonical_city = %s AND b.canonical_state = %s
                  AND b.categories @> ARRAY[%s]::text[]
                  AND ((a.activity_date BETWEEN %s AND %s)
-                      OR (a.activity_date BETWEEN %s AND %s))
-               GROUP BY b.area_id, a.activity_date, a.hour_of_day
+                      OR (a.activity_date BETWEEN %s AND %s))"""
+            + member_condition
+            + """ GROUP BY b.area_id, a.activity_date, a.hour_of_day
                ORDER BY b.area_id, a.activity_date, a.hour_of_day""",
-            (
-                filters.city,
-                filters.state,
-                filters.category,
-                filters.start_date,
-                filters.end_date,
-                start,
-                end,
-            ),
+            parameters,
         ).fetchall()
     return tuple(ActivityRecord(*row) for row in rows)
 
