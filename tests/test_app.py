@@ -357,12 +357,12 @@ def test_imported_views_render_real_evidence_without_mock_sections(
     assert any("Check-ins are an activity proxy" in item.value for item in app.caption)
 
 
-def test_navigation_contains_only_location_map_and_compare_sites() -> None:
+def test_navigation_contains_exploration_pages() -> None:
     with patch("sitesense.app.st.navigation", wraps=st.navigation) as navigation:
         app = _app()
     assert not app.exception
     pages = navigation.call_args.args[0]
-    assert [page.title for page in pages] == ["Location map", "Compare sites"]
+    assert [page.title for page in pages] == ["Location map", "Compare sites", "Business analysis"]
     assert app.header[0].value == "Location map"
     for removed in ("site_ranking", "customer_activity", "weather_impact", "demand_forecast"):
         with pytest.raises(ValueError):

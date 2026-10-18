@@ -109,7 +109,7 @@ def _screen_dates(coverage: DateCoverage) -> tuple[date, date]:
         st.info(error)
     dates = st.session_state["date_range"]
     st.caption(f"Applied dates: {dates[0]:%Y-%m-%d} to {dates[1]:%Y-%m-%d}.")
-    st.caption("The same dates apply to Location map and Compare sites.")
+    st.caption("The same dates apply to all exploration pages.")
     st.caption(
         f"Available check-in dates: {coverage.start_date:%Y-%m-%d} "
         f"to {coverage.end_date:%Y-%m-%d}. Recorded presets end at the latest available date."
@@ -140,7 +140,7 @@ def _reset_area_selections(scope: tuple[str, str]) -> None:
         st.session_state["area_scope"] = scope
 
 
-def _shared_filters() -> tuple[Filters, Catalog, str]:
+def _shared_filters(*, include_source_category: bool = False) -> tuple[Filters, Catalog, str]:
     with st.sidebar:
         st.subheader("Explore locations", icon=":material/tune:")
         city = st.selectbox(
@@ -167,18 +167,46 @@ def _shared_filters() -> tuple[Filters, Catalog, str]:
         )
         _reset_area_selections((city, category))
         catalog = _catalog(city, scope.state, category, revision)
+        if include_source_category:
+            source_categories = sorted(
+                {
+                    tag
+                    for business in catalog.businesses
+                    for tag in business.categories
+                    if tag != category
+                }
+            )
+            source_options = ["All source categories", *source_categories]
+            if (
+                st.session_state.get("business_source_scope") != (city, category)
+                or st.session_state.get("business_source_category") not in source_options
+            ):
+                st.session_state["business_source_category"] = source_options[0]
+                st.session_state["business_source_scope"] = (city, category)
+            st.selectbox(
+                "Source category",
+                source_options,
+                key="business_source_category",
+                persist_state="session",
+                help="Exact source label within the selected business category.",
+            )
         coverage = catalog.coverage
         dates = _screen_dates(coverage)
-        radius = st.slider(
-            "Nearby-business radius (km)",
-            min_value=0.5,
-            max_value=5.0,
-            value=1.0,
-            step=0.5,
-            key="radius_km",
-            persist_state="session",
-            help="Changes nearby-category counts only. ZIP membership and activity stay the same.",
-        )
+        radius = float(st.session_state.get("radius_km", 1.0))
+        if not include_source_category:
+            radius = st.slider(
+                "Nearby-business radius (km)",
+                min_value=0.5,
+                max_value=5.0,
+                value=1.0,
+                step=0.5,
+                key="radius_km",
+                persist_state="session",
+                help=(
+                    "Changes nearby-category counts only. "
+                    "ZIP membership and activity stay the same."
+                ),
+            )
         with st.expander("About this data", expanded=False):
             st.markdown("**Yelp archive** · business listings and recorded check-ins")
             st.caption(
@@ -242,6 +270,11 @@ def render_app() -> None:
             st.Page(
                 pages / "compare_sites.py", title="Compare sites", icon=":material/compare_arrows:"
             ),
+            st.Page(
+                pages / "business_analysis.py",
+                title="Business analysis",
+                icon=":material/storefront:",
+            ),
         ],
         position="sidebar",
     )
@@ -252,10 +285,13 @@ def render_app() -> None:
     st.caption("Explore locations, activity, and weather.")
     st.header(page.title, icon=page.icon)
     try:
-        filters, catalog, revision = _shared_filters()
+        filters, catalog, revision = _shared_filters(
+            include_source_category=page.title == "Business analysis"
+        )
         records: tuple[ActivityRecord, ...]
         if (
-            filters.end_date < catalog.coverage.start_date
+            page.title == "Business analysis"
+            or filters.end_date < catalog.coverage.start_date
             or filters.start_date > catalog.coverage.end_date
         ):
             records = ()
@@ -264,7 +300,9 @@ def render_app() -> None:
                 records = _activity(filters, revision)
         if not _import_is_unchanged(revision):
             return
-        summaries = summarize_areas(catalog, records, filters)
+        summaries = (
+            () if page.title == "Business analysis" else summarize_areas(catalog, records, filters)
+        )
     except ConfigurationError:
         render_setup("configuration")
         return
@@ -280,14 +318,20 @@ def render_app() -> None:
     st.session_state["screen_context"] = ScreenContext(
         filters, catalog, records, summaries, revision
     )
-    exploration.prepare_comparison(summaries)
-    st.caption(
+    if page.title != "Business analysis":
+        exploration.prepare_comparison(summaries)
+    scope_caption = (
         f"{filters.city}, {filters.state} · {filters.category_label} · "
-        f"{filters.start_date:%Y-%m-%d} to {filters.end_date:%Y-%m-%d} · "
-        f"{filters.radius_km:.1f} km nearby radius"
+        f"{filters.start_date:%Y-%m-%d} to {filters.end_date:%Y-%m-%d}"
     )
-    if notice := st.session_state.pop("exploration_notice", None):
-        st.info(notice)
+    if page.title == "Business analysis":
+        scope_caption += f" · {st.session_state['business_source_category']}"
+    else:
+        scope_caption += f" · {filters.radius_km:.1f} km nearby radius"
+    st.caption(scope_caption)
+    if page.title != "Business analysis":
+        if notice := st.session_state.pop("exploration_notice", None):
+            st.info(notice)
     if page.title == "Location map":
         with st.container(border=True):
             st.markdown("**Explore a ZIP, then compare your candidates.**")

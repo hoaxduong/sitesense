@@ -1,0 +1,3 @@
+from sitesense.business_views import render_business_analysis
+
+render_business_analysis()
