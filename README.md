@@ -10,9 +10,10 @@ Nashville and Tampa, filtered to an exact **Source category** such as Pizza.
 | **Compare businesses** | Compare up to four businesses in one weather/activity chart and a profile/activity matrix. |
 | **Business analysis** | Discover leading source categories, rank competitors and investigate an individual business's weather associations. |
 | **About our models** | Read a plain-language HGB guide, training timeline and measured comparisons. |
+| **About our database** | Understand the data flow, tables, relationships, provenance and migration safeguards. |
 
 Exploration pages share **Metro area → Business category → Source category → Date range**.
-The model guide works independently of the database.
+The model and database guides work independently of the database.
 The map defaults to the top 20 businesses; its scope chart includes every matching
 business. Activity uses recorded check-in totals. Covered days without check-ins
 are zero; unavailable data stays unavailable. Location map and Compare businesses

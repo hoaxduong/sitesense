@@ -751,6 +751,7 @@ def test_navigation_contains_exploration_pages() -> None:
         "Compare businesses",
         "Business analysis",
         "About our models",
+        "About our database",
     ]
     assert app.header[0].value == "Location map"
     for removed in ("site_ranking", "customer_activity", "weather_impact", "demand_forecast"):

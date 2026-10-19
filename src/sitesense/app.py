@@ -332,6 +332,11 @@ def render_app() -> None:
                 title="About our models",
                 icon=":material/model_training:",
             ),
+            st.Page(
+                pages / "about_database.py",
+                title="About our database",
+                icon=":material/database:",
+            ),
         ],
         position="sidebar",
     )
@@ -339,7 +344,7 @@ def render_app() -> None:
     if requested in ("location_map", "compare_sites"):
         st.switch_page(pages / f"{requested}.py")
     st.header(page.title, icon=page.icon)
-    if page.url_path == "about_models":
+    if page.url_path in ("about_models", "about_database"):
         page.run()
         return
     try:
