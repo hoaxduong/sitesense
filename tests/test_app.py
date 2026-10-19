@@ -770,7 +770,13 @@ def test_model_guide_is_standalone_and_does_not_load_database() -> None:
     assert not app.selectbox
     assert len(app.get("vega_lite_chart")) >= 1
     text = _visible_text(app)
-    for expected in ("How we train", "How we evaluate", "CatBoost", "HGB", "Daily average"):
+    for expected in (
+        "How we train",
+        "How we evaluate",
+        "Why we chose HGB",
+        "Poisson",
+        "Daily average",
+    ):
         assert expected.lower() in text.lower()
     assert "Database not configured" not in text
     assert "ZIP" not in text

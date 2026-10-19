@@ -124,9 +124,13 @@ check-ins are never replaced by model estimates.
 
 The loader checks payload hashes, model schema, source import revision, code,
 lockfile and package versions before loading trusted local estimators. No training
-occurs during rendering. **About our models** is a standalone guide with matched-day
-error charts and a training timeline; it can display compatible saved evaluation
-results without a database connection.
+occurs during rendering. **About our models** compares three approaches: daily
+average, Poisson regression and HGB. It separates full-population HGB/average
+results from the smaller, matched-day three-model research sample. City/category
+error charts, held-out monthly predictions and a training timeline explain both
+the HGB choice and where the average wins. Compatible saved results can be shown
+without a database connection; the research and app evaluations must share an
+import revision, and artifact/code/lockfile verification remains required.
 
 ## Interpretation
 

@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from sitesense import business_hgb, model_guide
+from sitesense import business_hgb, model_guide, model_guide_views
 
 st.caption("How our model works")
 st.markdown(
@@ -16,6 +16,28 @@ st.info(
     "dates without observations or for what-if comparisons. The daily average remains a "
     "comparison model. Using HGB does not mean it has beaten that simpler model."
 )
+
+st.subheader("Why we chose HGB")
+st.markdown("""
+We need a model that can use **real weather records** to estimate activity for each
+business. We compare three approaches:
+
+| Model | How it estimates activity | What it contributes |
+| --- | --- | --- |
+| Daily average | Repeats a business's historical daily average | A clear baseline to beat |
+| Poisson | Learns separate calendar and weather effects | A simpler weather model |
+| HGB | Learns combined business, calendar and weather patterns | Our working weather model |
+
+**Why HGB fits the task:** it can learn different weather patterns for different
+businesses and days. Its Poisson training objective is designed for nonnegative
+counts such as check-ins. It also uses the scikit-learn stack already in the app.
+These are reasons it is a suitable candidate, not proof that it predicts best.
+
+**What justifies choosing it over Poisson?** The matched validation comparison
+below answers that with measured scores. We also show the later-year results and
+where the daily average still wins. We do not choose a model by looking only at
+its most favorable result.
+""")
 
 st.subheader("1. What HGB does")
 st.markdown("""
@@ -41,18 +63,22 @@ st.markdown("""
    Train and compare weather models only on days with complete, accepted weather records.
 3. **Learn from 2017–2019 and check 2020.** This lets us examine errors before the later test.
 4. **Learn from 2018–2020 and check 2021.** Keep the model settings fixed for this later check.
-5. **Prepare the app model using 2019–2021.** The app then uses HGB for weather scenarios.
+5. **Prepare the app model using 2019–2021.** The app uses observed weather by default;
+   seasonal and custom weather are explicit what-if options.
 
-We keep the daily average and a seasonal model as comparisons. They help us see
-whether the extra complexity adds value. We do not automatically switch the app
-back to the average when it has a lower error score.
+The daily average is our simple reference. Poisson and HGB both use weather, so
+comparing them helps us examine whether HGB's extra flexibility adds value.
+The full app evaluation and the smaller three-model experiment are shown separately.
 """)
 
 st.subheader("3. How we evaluate")
 st.markdown("""
 We compare estimates with the actual recorded check-ins on the same business-days.
-All three models are scored on the same days with accepted weather, including zero
+Within each experiment, models are scored on the same days with accepted weather, including zero
 check-in days. This makes the comparison fair.
+
+The average learns from all covered training days; weather models need complete weather
+records for training. Their scores compare the resulting approaches, not weather alone.
 
 - **Error score (Poisson deviance):** measures how well the estimates match check-in
   counts. Lower is better. It is not an accuracy percentage.
@@ -75,56 +101,21 @@ except (OSError, ValueError, TypeError, KeyError, AttributeError):
         "Saved HGB evaluation results are unavailable or need to be refreshed after retraining."
     )
 else:
-    manifest = summary["manifest"]
-    st.caption(
-        f"Archived run: {manifest['created_at'][:10]} · "
-        f"{manifest['final_businesses']:,} business/category records in the final model. "
-        "The evaluation uses the businesses eligible in each earlier training window."
-    )
-    for metric, label in (
-        ("Error score", "Error score — lower is better"),
-        ("Daily error", "Average daily error in check-ins — lower is better"),
-    ):
-        st.vega_lite_chart(
-            summary["scores"],
-            {
-                "mark": "bar",
-                "encoding": {
-                    "x": {"field": "Period", "type": "nominal", "axis": {"labelAngle": 0}},
-                    "xOffset": {"field": "Model"},
-                    "y": {
-                        "field": metric,
-                        "type": "quantitative",
-                        "title": label,
-                        "scale": {"zero": True},
-                    },
-                    "color": {
-                        "field": "Model",
-                        "type": "nominal",
-                        "scale": {"range": ["#467caa", "#287359", "#b07835"]},
-                        "legend": {"orient": "top"},
-                    },
-                    "tooltip": [
-                        {"field": "Model"},
-                        {"field": "Period"},
-                        {"field": metric, "format": ".4f"},
-                        {"field": "Business-days"},
-                    ],
-                },
-            },
-            width="stretch",
-            height=280,
-            alt=f"{label}: HGB compared with the daily average and seasonal model",
-        )
-    later = [row for row in summary["scores"] if row["Period"] == "2021: later check"]
-    best = min(later, key=lambda row: row["Error score"])
-    st.markdown(
-        f"**What this shows:** {best['Model']} has the lowest 2021 error score in this run. "
-        "HGB stays the weather-scenario model; this result is a measure of its current "
-        "limitations, not a reason to label it the most accurate model."
-    )
-    with st.expander("View the exact scores"):
-        st.dataframe(summary["scores"], hide_index=True, alt="Saved matched-day evaluation scores")
+    model_guide_views.render_full_results(summary)
+    model_guide_views.render_three_model_research(summary["manifest"]["import_revision"])
+
+st.markdown("**How strong is the case for HGB?**")
+st.markdown("""
+HGB is a reasonable working model for our weather-aware analysis. Its advantage
+over Poisson must be checked on validation data; its advantage over a simple
+average is mixed across periods and business groups. The charts do not establish
+that weather itself improves accuracy: that needs the same HGB trained with and
+without weather on identical data.
+
+Before claiming HGB is the best model overall, we need more forward-time checks,
+stronger results in groups where it loses, and uncertainty estimates. We have not
+measured a speed advantage or proved that it predicts new-store success.
+""")
 
 st.subheader("5. Which years are used?")
 timeline = [
@@ -188,7 +179,8 @@ st.markdown("""
 - Check-ins are not customer counts, sales or a prediction that a new store will succeed.
 - History ends in 2022. Later openings, closures and market changes are not included.
 - A change in an HGB estimate does not prove that weather causes a change in visits.
-- We can also compare Poisson regression and CatBoost, using the same business-level tests.
+- Validation supports a choice before a later check; later results must still be reported.
+- Three models are compared here: daily average, Poisson and HGB.
 """)
 
 with st.expander("Technical details and sources"):
@@ -211,6 +203,8 @@ with st.expander("Technical details and sources"):
     Model and evaluation: `models/business_hgb/manifest.json` and `models.joblib`.
     Training: `scripts/train_business_hgb.py`, `src/sitesense/business_hgb_training.py`.
     Serving: `src/sitesense/business_hgb.py` and `src/sitesense/business_activity.py`.
+    Three-model research: notebook 05 and its verified `business_model_comparison` run.
+    HGB design: [scikit-learn histogram gradient boosting documentation](https://scikit-learn.org/stable/modules/ensemble.html#histogram-based-gradient-boosting).
     Saved evaluations check code, lockfile, package versions and payload hashes without
     connecting to the database. Serving additionally requires the current import revision.
     """)
