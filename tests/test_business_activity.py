@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 import streamlit as st
 
-from sitesense import business_activity, business_forecast, business_future_views
+from sitesense import business_activity, business_forecast, business_hgb
 from sitesense.business_forecast import BusinessBundle, BusinessGroup
 from sitesense.models import Business, Catalog, DateCoverage, Filters
 from sitesense.ui import ScreenContext
@@ -73,10 +73,11 @@ def _group(identifier: str, rate: float = 1) -> BusinessGroup:
 
 @pytest.fixture
 def model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, str]]:
+    monkeypatch.setitem(st.session_state, "business_weather_mode", "Seasonal weather")
     (tmp_path / "manifest.json").write_bytes(b"manifest")
-    (tmp_path / "businesses.json").write_bytes(b"businesses")
-    monkeypatch.setattr(business_forecast, "MODEL_DIR", tmp_path)
-    monkeypatch.setattr(business_forecast, "code_sha256", lambda: "code")
+    (tmp_path / "models.joblib").write_bytes(b"businesses")
+    monkeypatch.setattr(business_hgb, "MODEL_DIR", tmp_path)
+    monkeypatch.setattr(business_hgb, "code_sha256", lambda: "code")
     monkeypatch.setattr(business_forecast, "lock_sha256", lambda: "lock")
     calls: list[tuple[str, str]] = []
     bundle = BusinessBundle(
@@ -90,11 +91,19 @@ def model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, st
         {"training_end": "2021-12-31"},
     )
 
-    def load(revision: str, import_revision: str) -> BusinessBundle:
+    def load(directory: str, revision: str, import_revision: str) -> BusinessBundle:
         calls.append((revision, import_revision))
         return bundle
 
-    monkeypatch.setattr(business_future_views, "_bundle", load)
+    business_activity._hgb_projection.clear()
+    monkeypatch.setattr(business_activity, "_hgb_bundle", load)
+    monkeypatch.setattr(
+        business_hgb,
+        "project",
+        lambda bundle, city, state, category, source, start, end, ids, weather: (
+            business_forecast.project(bundle, city, state, category, source, start, end)
+        ),
+    )
     monkeypatch.setattr("sitesense.app._import_is_unchanged", lambda _: True)
     return calls
 
@@ -129,7 +138,7 @@ def test_empty_recorded_history_and_precoverage_do_not_open_model_files(
     def forbidden() -> str:
         pytest.fail("Recorded or precoverage days must not load projection artifacts")
 
-    monkeypatch.setattr(business_forecast, "code_sha256", forbidden)
+    monkeypatch.setattr(business_hgb, "code_sha256", forbidden)
     context = _context(start, end)
     assert context.records == ()
     assert business_activity.load_projection(context) == business_activity.ProjectionResult(None)
@@ -170,7 +179,7 @@ def test_project_uses_exact_canonical_city_state_and_source(
         ),
         {"training_end": "2021-12-31"},
     )
-    monkeypatch.setattr(business_future_views, "_bundle", lambda *_: scoped)
+    monkeypatch.setattr(business_activity, "_hgb_bundle", lambda *_: scoped)
     result = business_activity.load_projection(_context(date(2022, 1, 3), date(2022, 1, 3)))
     assert [row.group.business_id for row in result.projections] == ["a"]
 
@@ -193,7 +202,7 @@ def test_failed_or_stale_model_keeps_interval_and_sanitizes_failure(
     def fail(*_: Any) -> BusinessBundle:
         raise exception("secret connection or internal artifact path")
 
-    monkeypatch.setattr(business_future_views, "_bundle", fail)
+    monkeypatch.setattr(business_activity, "_hgb_bundle", fail)
     result = business_activity.load_projection(_context(date(2022, 1, 1), date(2022, 1, 5)))
     assert result.interval == (date(2022, 1, 3), date(2022, 1, 5))
     assert result.projections == ()
@@ -203,7 +212,7 @@ def test_failed_or_stale_model_keeps_interval_and_sanitizes_failure(
 
 
 def test_missing_artifacts_are_safe(model: list[tuple[str, str]]) -> None:
-    (business_forecast.MODEL_DIR / "manifest.json").unlink()
+    (business_hgb.MODEL_DIR / "manifest.json").unlink()
     result = business_activity.load_projection(_context(date(2022, 1, 3), date(2022, 1, 5)))
     assert result.issue is not None
     assert result.projections == ()
@@ -213,7 +222,7 @@ def test_missing_artifacts_are_safe(model: list[tuple[str, str]]) -> None:
 def test_changing_artifacts_changes_verified_cache_identity(model: list[tuple[str, str]]) -> None:
     context = _context(date(2022, 1, 3), date(2022, 1, 5))
     first = business_activity.load_projection(context)
-    (business_forecast.MODEL_DIR / "businesses.json").write_bytes(b"changed payload")
+    (business_hgb.MODEL_DIR / "models.joblib").write_bytes(b"changed payload")
     second = business_activity.load_projection(context)
     assert first.model_revision != second.model_revision
     assert len(model) == 2
@@ -254,7 +263,7 @@ def test_seasonal_daily_values_sum_to_the_business_period_projection(
 ) -> None:
     rates = tuple(index / 10 for index in range(84))
     bundle = BusinessBundle((replace(_group("a"), rates=rates),), {"training_end": "2021-12-31"})
-    monkeypatch.setattr(business_future_views, "_bundle", lambda *_: bundle)
+    monkeypatch.setattr(business_activity, "_hgb_bundle", lambda *_: bundle)
     result = business_activity.load_projection(_context(date(2024, 2, 26), date(2024, 3, 4)))
     rows = business_activity.daily_projection(result, "a")
     assert len(rows) == 8

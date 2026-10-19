@@ -242,7 +242,8 @@ def business_csv(
                 "projected_start": projection.interval[0],
                 "projected_end": projection.interval[1],
                 "model_revision": projection.model_revision,
-                "estimate_kind": "individual_business_calendar_projection",
+                "estimate_kind": "individual_business_hgb_weather_scenario",
+                "weather_basis": projection.weather_basis,
             }
         )
     exports = [dict(scope, **row) for row in rows]
@@ -440,6 +441,8 @@ def _render_recorded(context: ScreenContext) -> None:
     projection = business_activity.load_projection(context)
     if projection.issue:
         st.info(projection.issue)
+    if caption := business_activity.projection_caption(projection):
+        st.caption(caption)
     rows = business_rows(context, records, projection)
     ids = tuple(str(row["Business ID"]) for row in rows)
     _prepare_focus(context, ids)

@@ -14,7 +14,8 @@ charts keep hourly measurements and daily fallback summaries separate.
 
 These are observed station reports, not measurements at each business or weather
 forecasts. Daily correlations and the retained area-level weather models use ACIS
-sources. The current business projection model uses calendar patterns without weather.
+sources. Business HGB scenarios also use accepted daily ACIS training inputs; hourly
+chart samples do not replace those model features.
 
 ## Prepare the optional hourly import
 

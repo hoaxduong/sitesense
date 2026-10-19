@@ -25,10 +25,13 @@ and period. They do not identify unique customers or prove physical visits.
 Covered dates without check-ins are zero. Failed reads and dates outside imported
 coverage are unavailable, not zero.
 
-**Projected check-ins**: Calendar-model estimates for supported individual
-businesses on dates strictly after imported activity coverage. They extrapolate
-archived patterns without future weather, rent or later market conditions. Missing
-support stays unavailable. They do not estimate new-store revenue or success.
+**Projected check-ins**: HGB estimates for supported individual businesses on dates
+strictly after imported activity coverage. Inputs default to complete real daily
+station observations; weather coverage is independent of check-in coverage. Seasonal
+station/month means and custom inputs are explicitly selected what-if scenarios,
+not live weather forecasts. Missing support stays unavailable; no calendar baseline is
+silently substituted. Estimates do not include rent or later market changes and do
+not predict new-store revenue or success.
 
 **Business profile**: Source snapshot fields such as categories, rating, review
 count and status. Selecting historical activity dates does not turn these fields
@@ -43,7 +46,7 @@ measurement at every business or evidence of a causal weather effect.
 
 ## Retained research terms
 
-These terms occur in older notebooks and the [research archive](docs/archive/README.md).
+These terms occur in older local research runs and the [research archive](docs/archive/README.md).
 They do not define the current business activity ranking.
 
 **Candidate area**: Businesses grouped by source city, state and ZIP label. This

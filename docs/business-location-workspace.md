@@ -87,21 +87,46 @@ when available; otherwise charts use mapped daily ACIS summaries. Precipitation
 uses daily ACIS totals. Shared charts count each mapped station once per date,
 not once per business. See [Observed hourly weather](hourly-weather.md).
 
-Prepare individual-business projections explicitly outside Streamlit:
+Prepare individual-business HGB models explicitly outside Streamlit:
 
 ```sh
-uv run --frozen --env-file .env python scripts/train_business_forecast.py
+uv run --frozen --env-file .env python scripts/train_business_hgb.py
 ```
 
-The read-only training process writes ignored artifacts under
-`models/business_forecast/`. It compares an overall mean with a shrunk
-month/weekday model using forward validation, then fits the selected model on
-2019–2021. Each fit requires first recorded activity by its training start and at
-least 20 training check-ins, retaining zero-activity calendar days. Source tags
-filter membership without changing an individual's prediction. The loader checks
-source, code, lockfile, import and payload provenance together with the expected
-schema, support rules, training windows and validation metrics. Changed or missing
-artifacts make projections unavailable; the app never trains during rendering.
+Training writes ignored `models/business_hgb/models.joblib` and `manifest.json`.
+HGB learns integer daily counts using business identity, month, weekday and accepted
+station temperature/rain. Models cover all supported city/parent-category businesses
+in batches of up to 128 identities, rather than a sampled source niche.
+
+Each training window requires first recorded activity by its start and at least 20
+training check-ins. Covered zero-activity days stay in the panel. HGB trains on days
+with complete accepted weather; the daily-average and seasonal baselines are scored
+on the same held-out weather days. Validation is 2020 after fitting 2017–2019;
+the later assessment is 2021 after fitting 2018–2020. Fixed HGB settings are used
+before that assessment. HGB serves the weather-analysis purpose; the lower-error
+baseline is still reported, without automatically replacing HGB. Final fitting and
+monthly weather references use only 2019–2021.
+
+For projected dates, the sidebar defaults to **Observed weather**: real daily station
+records, independently of the check-in archive's endpoint. HGB estimates activity;
+weather remains measured. A business needs complete low/high temperature and rain
+for every selected projected day, so incomplete totals are never ranked against
+complete totals. Daily chart values use each day's actual weather rather than an
+84-cell calendar approximation.
+
+When observations are missing or a what-if comparison is wanted, explicitly choose
+**Seasonal weather** (training station/month averages) or **Custom weather** (one
+daily low/high/rain tuple applied to the interval). Neither scenario is a live
+forecast. Missing observed data never silently switches to a scenario or baseline.
+Source tags filter whole businesses. Map totals, comparison matrices, daily lines
+and exports share the same estimates and identify the weather basis. Recorded
+check-ins are never replaced by model estimates.
+
+The loader checks payload hashes, model schema, source import revision, code,
+lockfile and package versions before loading trusted local estimators. No training
+occurs during rendering. **About our models** is a standalone guide with matched-day
+error charts and a training timeline; it can display compatible saved evaluation
+results without a database connection.
 
 ## Interpretation
 
@@ -111,7 +136,8 @@ snapshot. Historical opening dates are unavailable, and zero activity does not
 establish whether a business was open. Weather associations do not establish
 causation; activity and weather timestamps are not verified as aligned.
 
-Projections extrapolate archived individual patterns. They do not incorporate
-later market changes, closures, rent or forecast weather, and do not predict a
-new shop's performance. Earlier area-based models and interfaces are documented
+Projections extrapolate archived individual patterns without later market changes,
+closures or rent. They do not predict a new shop's performance. Observed weather
+is measured; scenario weather is a what-if input, not forecast weather.
+Earlier area-based models and interfaces are documented
 in the [research archive](archive/README.md).

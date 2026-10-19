@@ -9,7 +9,7 @@ import streamlit as st
 
 from sitesense import business_analysis as analysis
 from sitesense import repository
-from sitesense.business_activity import ProjectionResult, load_projection
+from sitesense.business_activity import ProjectionResult, load_projection, projection_caption
 from sitesense.comparison_weather_views import render_comparison_weather
 from sitesense.database import ConfigurationError
 from sitesense.location_businesses import recorded_interval, scoped_businesses
@@ -257,6 +257,8 @@ def render_business_comparison() -> None:
     projection = load_projection(context, selected)
     if projection.issue:
         st.info(projection.issue)
+    if caption := projection_caption(projection):
+        st.caption(caption)
     by_id = {business.business_id: business for business in businesses}
     render_comparison_weather(
         context, tuple(by_id[identifier] for identifier in selected), projection

@@ -19,7 +19,6 @@ from sitesense.date_filters import (
 from sitesense.models import (
     BUSINESS_CATEGORY_LABELS,
     CITY_SCOPES,
-    ActivityRecord,
     Catalog,
     DateCoverage,
     Filters,
@@ -36,11 +35,6 @@ def _categories(city: str, state: str, revision: str) -> tuple[str, ...]:
 @st.cache_data(ttl=300, max_entries=32, show_spinner=False)
 def _catalog(city: str, state: str, category: str, revision: str) -> Catalog:
     return repository.load_catalog(city, state, category)
-
-
-@st.cache_data(ttl=300, max_entries=64, show_spinner=False)
-def _activity(filters: Filters, revision: str) -> tuple[ActivityRecord, ...]:
-    return repository.load_activity(filters)
 
 
 def _set_date_draft(dates: tuple[date, date]) -> None:
@@ -245,8 +239,51 @@ def _shared_filters(*, full_catalog: bool = False) -> tuple[Filters, Catalog, st
             st.caption(
                 "The shared date range applies to all pages. Estimates appear only after "
                 "recorded coverage ends; covered days with no check-ins stay zero. "
-                "Estimates extrapolate archived patterns without later market changes or "
-                "future weather."
+                "HGB estimates use weather scenarios and archived business patterns. "
+                "They do not include later market changes."
+            )
+        if dates[1] > coverage.end_date and not full_catalog:
+            st.subheader("Weather inputs", icon=":material/partly_cloudy_day:")
+            mode = st.pills(
+                "Weather source",
+                ("Observed weather", "Seasonal weather", "Custom weather"),
+                default="Observed weather",
+                required=True,
+                key="business_weather_mode",
+                persist_state="session",
+            )
+            if mode == "Custom weather":
+                st.number_input(
+                    "Daily low (°C)",
+                    value=15.0,
+                    min_value=-80.0,
+                    max_value=65.0,
+                    key="business_weather_low",
+                    persist_state="session",
+                )
+                st.number_input(
+                    "Daily high (°C)",
+                    value=25.0,
+                    min_value=-80.0,
+                    max_value=65.0,
+                    key="business_weather_high",
+                    persist_state="session",
+                )
+                st.number_input(
+                    "Daily rain (mm)",
+                    value=0.0,
+                    min_value=0.0,
+                    max_value=500.0,
+                    key="business_weather_rain",
+                    persist_state="session",
+                )
+            st.caption(
+                "Observed weather uses real station records where complete. "
+                "Check-in and weather histories cover different dates. "
+                "For dates without observations, explicitly choose a scenario. "
+                "Seasonal weather uses each station's monthly averages from 2019–2021. "
+                "Custom weather applies the same values to every selected day. "
+                "Seasonal and custom weather are scenarios, not live weather forecasts."
             )
     filters = Filters(city, scope.state, category, dates[0], dates[1], radius, source_category)
     return filters, catalog if full_catalog else _scope_catalog(catalog, source_category), revision
@@ -258,7 +295,6 @@ def _import_is_unchanged(revision: str) -> bool:
         return True
     _categories.clear()
     _catalog.clear()
-    _activity.clear()
     retries = int(st.session_state.get("import_load_retries", 0))
     if retries < 2:
         st.session_state["import_load_retries"] = retries + 1
@@ -291,6 +327,11 @@ def render_app() -> None:
                 title="Business analysis",
                 icon=":material/storefront:",
             ),
+            st.Page(
+                pages / "about_models.py",
+                title="About our models",
+                icon=":material/model_training:",
+            ),
         ],
         position="sidebar",
     )
@@ -298,6 +339,9 @@ def render_app() -> None:
     if requested in ("location_map", "compare_sites"):
         st.switch_page(pages / f"{requested}.py")
     st.header(page.title, icon=page.icon)
+    if page.url_path == "about_models":
+        page.run()
+        return
     try:
         filters, catalog, revision = _shared_filters(full_catalog=page.title == "Business analysis")
         if not _import_is_unchanged(revision):

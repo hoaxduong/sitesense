@@ -1,7 +1,6 @@
 """Served business map, comparison, shared filters and evidence boundaries.
 
-The retired area workspace retains isolated model/view tests. Application
-navigation now stays at individual business and exact source-category level.
+Application navigation stays at individual business and exact source-category level.
 """
 
 import csv
@@ -28,7 +27,7 @@ from sitesense import (
     repository,
     scope_weather_views,
 )
-from sitesense.app import _activity, _catalog, _categories
+from sitesense.app import _catalog, _categories
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
 from sitesense.business_forecast import BusinessGroup, BusinessProjection
 from sitesense.models import Business, Catalog, DateCoverage, Filters
@@ -48,7 +47,6 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     for loader in (
         _categories,
         _catalog,
-        _activity,
         business_map._business_activity,
         business_comparison._activity,
         business_views._business_activity,
@@ -752,11 +750,30 @@ def test_navigation_contains_exploration_pages() -> None:
         "Location map",
         "Compare businesses",
         "Business analysis",
+        "About our models",
     ]
     assert app.header[0].value == "Location map"
     for removed in ("site_ranking", "customer_activity", "weather_impact", "demand_forecast"):
         with pytest.raises(ValueError):
             _page(app, removed)
+
+
+def test_model_guide_is_standalone_and_does_not_load_database() -> None:
+    app = _app()
+    with patch(
+        "sitesense.app.repository.get_import_revision",
+        side_effect=AssertionError("The model guide must not query the database"),
+    ):
+        app = _page(app, "about_models")
+    assert not app.exception
+    assert app.header[0].value == "About our models"
+    assert not app.selectbox
+    assert len(app.get("vega_lite_chart")) >= 1
+    text = _visible_text(app)
+    for expected in ("How we train", "How we evaluate", "CatBoost", "HGB", "Daily average"):
+        assert expected.lower() in text.lower()
+    assert "Database not configured" not in text
+    assert "ZIP" not in text
 
 
 @pytest.mark.parametrize("page", PAGES)

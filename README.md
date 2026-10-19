@@ -9,12 +9,14 @@ Nashville and Tampa, filtered to an exact **Source category** such as Pizza.
 | **Location map** | Find top businesses in a niche, view business activity over a weather layer, and select competitors with table checkboxes. |
 | **Compare businesses** | Compare up to four businesses in one weather/activity chart and a profile/activity matrix. |
 | **Business analysis** | Discover leading source categories, rank competitors and investigate an individual business's weather associations. |
+| **About our models** | Read a plain-language HGB guide, training timeline and measured comparisons. |
 
-All pages share **Metro area → Business category → Source category → Date range**.
+Exploration pages share **Metro area → Business category → Source category → Date range**.
+The model guide works independently of the database.
 The map defaults to the top 20 businesses; its scope chart includes every matching
 business. Activity uses recorded check-in totals. Covered days without check-ins
 are zero; unavailable data stays unavailable. Location map and Compare businesses
-can show supported calendar projections after imported activity coverage ends,
+can show HGB estimates using real observed weather after imported activity coverage ends,
 using the same date range.
 
 Check-ins are an activity proxy, not customers or revenue. Source tags overlap,
@@ -47,15 +49,22 @@ its data. See [Database setup](docs/database.md) for imports, connections and ba
 
 ## Prepare optional projections
 
-Train the current individual-business calendar models explicitly after importing data:
+Train the current individual-business HGB model explicitly after importing data:
 
 ```sh
-uv run --frozen --env-file .env python scripts/train_business_forecast.py
+uv run --frozen --env-file .env python scripts/train_business_hgb.py
 ```
 
-Training writes `businesses.json` and `manifest.json` under the ignored
-`models/business_forecast/` directory. The app checks model payloads, training
+Training writes `models.joblib` and `manifest.json` under the ignored
+`models/business_hgb/` directory. The app checks model payloads, training
 provenance, matching source code, `uv.lock` and the imported database revision.
+The sidebar defaults to real observed station weather. Check-in and weather histories
+cover different dates. A business needs complete temperature/rain observations for
+the selected projected period. For missing observations or what-if comparisons,
+explicitly choose seasonal station/month averages or custom daily weather; these
+are scenarios, not live forecasts. The daily average and
+seasonal calendar model remain evaluation baselines; HGB is used for the weather
+analysis purpose without claiming it always has lower error.
 It never trains during rendering. Missing or mismatched artifacts leave projections
 unavailable while recorded activity remains usable.
 
@@ -70,10 +79,12 @@ notebook execution and generated outputs.
 | Notebooks | Purpose |
 | --- | --- |
 | 01–02 | Prepare and explore Yelp and Climate source data for import. |
-| 03–04 | Reproduce retained area-level weather forecasting experiments and HGB training. |
+| 03–05 | Compare business-level calendar, Poisson, HGB, GAM-style Poisson and CatBoost models; prepare app HGB training and calendar references. |
+| 06–07 | Read the Vietnamese business-level model-selection report and beginner explanation. |
+| 08 | Audit the current source-category/business workflow against imported data. |
 
-The area-level experiments and `models/location_forecast/` bundle are retained
-research, separate from the current business projection model. Earlier interfaces,
+All revised experiments use individual businesses and exact source-category filters.
+Weather research models remain separate from the app HGB serving bundle. Earlier interfaces,
 dated audits and decisions are linked from the [research archive](docs/archive/README.md).
 
 ## Validation
@@ -100,7 +111,7 @@ database shows setup guidance.
 
 The current image does not package the source checkout, training script, lockfile
 and model artifacts required by business projection verification. Mounting only
-`models/business_forecast/` does not enable projections. Use the source checkout
+`models/business_hgb/` does not enable projections. Use the source checkout
 for projection preparation and exploration until that packaging is supported.
 
 See the [documentation index](docs/README.md), [domain glossary](CONTEXT.md) and

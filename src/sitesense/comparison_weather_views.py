@@ -223,6 +223,7 @@ def render_comparison_weather(
             "Projected interval end": end.isoformat() if end > coverage.end_date else "",
             "Import revision": context.import_revision,
             "Model revision": projection.model_revision or "",
+            "Weather scenario": projection.weather_basis or "",
         }
         export_rows = [dict(row, **metadata) for row in chart_rows]
         output = io.StringIO()
