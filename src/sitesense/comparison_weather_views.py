@@ -75,6 +75,7 @@ def render_comparison_weather(
         st.info("Choose one to four businesses in the selected source category.")
         return
     st.subheader("Weather and recorded activity")
+    st.caption("**WBS: US2 · T023 · Weather and activity comparison charts**")
     options = ("Temperature (°C)", "Precipitation (mm)")
     if st.session_state.get("comparison_weather_metric") not in options:
         st.session_state["comparison_weather_metric"] = options[0]

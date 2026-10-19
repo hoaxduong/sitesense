@@ -24,6 +24,7 @@ from sitesense.models import (
     Filters,
 )
 from sitesense.ui import ScreenContext, render_setup
+from sitesense.use_cases import render_destination
 
 
 @st.cache_data(ttl=300, max_entries=16, show_spinner=False)
@@ -244,6 +245,7 @@ def _shared_filters(*, full_catalog: bool = False) -> tuple[Filters, Catalog, st
             )
         if dates[1] > coverage.end_date and not full_catalog:
             st.subheader("Weather inputs", icon=":material/partly_cloudy_day:")
+            st.caption("**WBS: US3 · T026 · Weather scenarios · T029 · Forecast interface**")
             mode = st.pills(
                 "Weather source",
                 ("Observed weather", "Seasonal weather", "Custom weather"),
@@ -337,6 +339,11 @@ def render_app() -> None:
                 title="About our database",
                 icon=":material/database:",
             ),
+            st.Page(
+                pages / "use_cases.py",
+                title="Use cases",
+                icon=":material/checklist:",
+            ),
         ],
         position="sidebar",
     )
@@ -344,7 +351,18 @@ def render_app() -> None:
     if requested in ("location_map", "compare_sites"):
         st.switch_page(pages / f"{requested}.py")
     st.header(page.title, icon=page.icon)
-    if page.url_path in ("about_models", "about_database"):
+    wbs_labels = {
+        "Location map": "US1 · T017 · Ranking and comparison dashboard",
+        "Compare businesses": "US1 · T017 · Business comparison dashboard",
+        "Business analysis": "US1 · T017 · Business analysis dashboard",
+        "About our models": "US3 · T025 · Baseline · T026 · Forecast model · T027 · Evaluation",
+        "About our database": "T007 · Schema · T008 · Yelp import · T009 · Weather import · "
+        "T010 · Business–station matching",
+    }
+    if label := wbs_labels.get(page.title):
+        st.caption(f"**WBS: {label}**")
+    render_destination(page.url_path or "location_map")
+    if page.url_path in ("about_models", "about_database", "use_cases"):
         page.run()
         return
     try:

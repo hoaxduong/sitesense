@@ -17,7 +17,7 @@ st.info(
     "data coverage or applied migrations."
 )
 
-st.subheader("1. From source files to the app")
+st.subheader("1. From source files to the app", anchor="data-pipeline")
 st.code(
     "Yelp archives       ACIS daily reports       NOAA hourly reports\n"
     "      │                     │                        │\n"
@@ -44,7 +44,7 @@ st.markdown("""
   remain files. The app's business HGB bundle lives under `models/business_hgb/`.
 """)
 
-st.subheader("2. What each table stores")
+st.subheader("2. What each table stores", anchor="database-tables")
 st.caption("Keys below describe one stored row. All table names belong to the sitesense schema.")
 st.markdown(
     "| Table | One row represents | Primary key |\n"
@@ -110,7 +110,7 @@ each have a foreign key, `dataset_id`, to `datasets`. Areas and migration histor
 and time. It does not replace the mapped daily ACIS station used by analysis and HGB.
 """)
 
-st.subheader("4. Reading activity and weather correctly")
+st.subheader("4. Reading activity and weather correctly", anchor="reading-data")
 st.markdown("""
 **Activity is sparse.** The database stores only positive hourly check-in buckets.
 The application fills absent buckets with zero only inside completed imported activity

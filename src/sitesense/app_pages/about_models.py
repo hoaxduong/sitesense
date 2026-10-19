@@ -39,7 +39,8 @@ where the daily average still wins. We do not choose a model by looking only at
 its most favorable result.
 """)
 
-st.subheader("1. What HGB does")
+st.subheader("1. What HGB does", anchor="forecast-model")
+st.caption("**WBS: US3 · T026 · Forecast model**")
 st.markdown("""
 Think of HGB as a series of small decision trees. Each new tree learns how to reduce
 mistakes made by the earlier ones. Together, they can learn patterns such as how
@@ -55,7 +56,8 @@ HGB can change its estimate when the calendar or weather inputs change.
 Both give expected counts over time, not a count of individual customers.
 """)
 
-st.subheader("2. How we train")
+st.subheader("2. How we train", anchor="model-training")
+st.caption("**WBS: US3 · T025 · Baseline · T026 · Forecast model**")
 st.markdown("""
 1. **Prepare each business's daily records.** Include days with no check-ins inside
    the recorded period. Use only businesses with enough earlier history.
@@ -71,7 +73,8 @@ comparing them helps us examine whether HGB's extra flexibility adds value.
 The full app evaluation and the smaller three-model experiment are shown separately.
 """)
 
-st.subheader("3. How we evaluate")
+st.subheader("3. How we evaluate", anchor="model-evaluation")
+st.caption("**WBS: US3 · T027 · Forecast evaluation**")
 st.markdown("""
 We compare estimates with the actual recorded check-ins on the same business-days.
 Within each experiment, models are scored on the same days with accepted weather, including zero
@@ -90,6 +93,7 @@ weather-based analysis. Past-year tests do not establish accuracy for today's ma
 """)
 
 st.subheader("4. Compare the results")
+st.caption("**WBS: US3 · T025 · Baseline · T027 · Evaluation results**")
 st.caption(
     "Saved training-run results, checked against local code and artifact hashes. "
     "This page does not connect to the database to check its current revision."

@@ -442,6 +442,7 @@ def _render_recorded(context: ScreenContext) -> None:
     if projection.issue:
         st.info(projection.issue)
     if caption := business_activity.projection_caption(projection):
+        st.caption("**WBS: US3 · T026 · HGB estimates · T029 · Forecast interface**")
         st.caption(caption)
     rows = business_rows(context, records, projection)
     ids = tuple(str(row["Business ID"]) for row in rows)
@@ -478,7 +479,8 @@ def _render_recorded(context: ScreenContext) -> None:
             f"Recorded: {covered[0]:%d %b %Y}–{covered[1]:%d %b %Y}; other dates unavailable."
         )
     _render_map(rows, context, projection)
-    st.subheader("Top businesses in the selected niche")
+    st.subheader("Top businesses in the selected niche", anchor="business-ranking")
+    st.caption("**WBS: US1 · T013 · Check-in totals · T014 · Activity ranking**")
     with st.container(horizontal=True, gap="small", vertical_alignment="bottom"):
         search = st.text_input(
             "Search business names", key="business_map_search", persist_state="session", width=320

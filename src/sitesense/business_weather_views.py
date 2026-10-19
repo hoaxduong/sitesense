@@ -397,6 +397,7 @@ def render_business_weather(
 ) -> None:
     """Render exact-business daily associations within known activity coverage."""
     st.subheader("Weather and recorded activity")
+    st.caption("**WBS: US2 · T023 · Weather and activity charts**")
     catalog = context.catalog
     selected = next(
         (row for row in catalog.businesses if row.business_id == business.business_id), None
@@ -560,7 +561,11 @@ def render_business_weather(
         observed_coverage=(start, end) if has_recorded else (date.max, date.min),
         daily_weather_rows=weather_rows,
     )
-    with st.expander("Analysis details"):
+    show_sensitivity = st.query_params.get("wbs") == "T021"
+    with st.expander("Analysis details", expanded=show_sensitivity):
+        if show_sensitivity:
+            st.subheader("Weather sensitivity", anchor="weather-sensitivity")
+        st.caption("**WBS: US2 · T021 · Descriptive weather sensitivity (daily correlations)**")
         st.caption(f"Business ID: {selected.business_id}")
         if station is not None:
             st.caption(
@@ -645,7 +650,13 @@ def render_business_weather(
             column_config={"Date": st.column_config.DateColumn(format="YYYY-MM-DD")},
             alt="Dated daily activity and accepted station observations, retaining missing weather",
         )
-    with st.expander("Weather band summary"):
+    show_bands = st.query_params.get("wbs") == "T020"
+    with st.expander("Weather band summary", expanded=show_bands):
+        if show_bands:
+            st.subheader("Weather band summary", anchor="weather-bands")
+        st.caption(
+            "**WBS: US2 · T020 · Descriptive weather bands; event baseline not implemented**"
+        )
         band_summary = pd.concat(
             [
                 _weather_band_table(days_by_metric[measure], variable, measure)

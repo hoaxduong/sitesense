@@ -32,6 +32,7 @@ from sitesense.business_analysis import BusinessActivity, BusinessMonth
 from sitesense.business_forecast import BusinessGroup, BusinessProjection
 from sitesense.models import Business, Catalog, DateCoverage, Filters
 from sitesense.ui import ScreenContext
+from sitesense.use_cases import USE_CASES
 
 APP_FILE = Path(__file__).resolve().parents[1] / "app.py"
 PAGES = {
@@ -752,6 +753,7 @@ def test_navigation_contains_exploration_pages() -> None:
         "Business analysis",
         "About our models",
         "About our database",
+        "Use cases",
     ]
     assert app.header[0].value == "Location map"
     for removed in ("site_ranking", "customer_activity", "weather_impact", "demand_forecast"):
@@ -781,6 +783,66 @@ def test_model_guide_is_standalone_and_does_not_load_database() -> None:
         assert expected.lower() in text.lower()
     assert "Database not configured" not in text
     assert "ZIP" not in text
+
+
+def test_use_case_table_lists_all_tasks_without_loading_database() -> None:
+    app = _app()
+    with patch(
+        "sitesense.app.repository.get_import_revision",
+        side_effect=AssertionError("The use-case index must not query the database"),
+    ):
+        app = _page(app, "use_cases")
+    assert not app.exception
+    table = app.dataframe[0].value
+    assert table["Code"].tolist() == [f"T{number:03}" for number in range(1, 37)]
+    assert len({case.code for case in USE_CASES}) == 36
+    assert table.set_index("Code").loc["T024", "Page"] == "No app screen"
+    assert "Partial" in table.set_index("Code").loc["T020", "Details"]
+    assert not app.selectbox
+
+
+def test_use_case_table_has_direct_section_links_and_no_selection() -> None:
+    app = _page(_app(), "use_cases")
+    table = app.dataframe[0].value.set_index("Code")
+    for case in USE_CASES:
+        if case.page:
+            route = "" if case.page == "location_map" else case.page
+            assert table.loc[case.code, "Open feature"] == (
+                f"./{route}?wbs={case.code}#{case.anchor}"
+            )
+        else:
+            assert table["Open feature"].isna().loc[case.code]
+            assert len(table.loc[case.code, "Details"]) > 25
+    assert not app.dataframe[0].proto.selection_mode
+    assert not app.checkbox
+    assert not app.get("page_link")
+
+
+@pytest.mark.parametrize("code", ["T007", "T008", "T009", "T010", "T025", "T026", "T027"])
+def test_guide_destinations_have_matching_section_anchors(code: str) -> None:
+    case = next(case for case in USE_CASES if case.code == code)
+    app = _page(_app(), case.page)
+    app.query_params["wbs"] = code
+    app.run()
+    assert not app.exception
+    assert any(f"](#{case.anchor})" in item.value for item in app.markdown)
+    assert any(heading.proto.anchor == case.anchor for heading in app.subheader)
+
+
+def test_ranking_link_opens_explanation_and_preserves_filters(imported_data: None) -> None:
+    app = _app()
+    app.selectbox(key="business_source_category").set_value("Pizza").run()
+    dates = app.session_state["date_range"]
+    app = _page(app, "use_cases")
+    app = _page(app, "business_analysis")
+    app.query_params["wbs"] = "T015"
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="business_source_category").value == "Pizza"
+    assert app.session_state["date_range"] == dates
+    details = next(item for item in app.expander if item.label == "Ranking details")
+    assert details.proto.expanded
+    assert any(heading.proto.anchor == "ranking-details" for heading in app.subheader)
 
 
 @pytest.mark.parametrize("page", PAGES)

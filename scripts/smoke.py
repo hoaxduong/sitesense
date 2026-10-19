@@ -85,8 +85,12 @@ def main() -> None:
                 assert not app.exception, [error.message for error in app.exception]
                 assert app.header[0].value == "About our database"
                 assert not app.selectbox
+                app.switch_page("src/sitesense/app_pages/use_cases.py").run()
+                assert not app.exception, [error.message for error in app.exception]
+                assert app.header[0].value == "Use cases"
+                assert not app.selectbox
             assert process.poll() is None
-            print("Smoke passed: server, three exploration pages, both guides, and safe setup.")
+            print("Smoke passed: server, exploration pages, guides, use cases, and safe setup.")
         finally:
             process.terminate()
             try:

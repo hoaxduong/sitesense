@@ -193,7 +193,8 @@ def _render_comparison_matrix(
         if column in columns:
             column = _label(business)
         columns[column] = values
-    st.subheader("Business comparison")
+    st.subheader("Business comparison", anchor="business-comparison")
+    st.caption("**WBS: US1 · T013 · Check-in totals · T017 · Business comparison**")
     periods = [f"Selected: {filters.start_date:%d %b %Y} – {filters.end_date:%d %b %Y}"]
     periods.append(
         f"Recorded: {covered[0]:%d %b %Y} – {covered[1]:%d %b %Y}"
@@ -258,6 +259,7 @@ def render_business_comparison() -> None:
     if projection.issue:
         st.info(projection.issue)
     if caption := projection_caption(projection):
+        st.caption("**WBS: US3 · T026 · HGB estimates · T029 · Forecast interface**")
         st.caption(caption)
     by_id = {business.business_id: business for business in businesses}
     render_comparison_weather(

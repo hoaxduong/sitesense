@@ -51,6 +51,7 @@ def _comparison_csv(table: pd.DataFrame, filters: Filters, source: str = "") -> 
 
 def _category_comparison(summaries: tuple[analysis.BusinessSummary, ...], filters: Filters) -> None:
     st.subheader("Top source categories")
+    st.caption("**WBS: US1 · T013 · Check-in totals · T014 · Activity ranking**")
     st.caption(f"Across {filters.category_label}, including alternatives to the selected niche.")
     tags = analysis.subcategory_groups(filters.category, tuple(row.business for row in summaries))[
         "Source categories"
@@ -225,6 +226,7 @@ def _business_comparison(
     source: str,
 ) -> None:
     st.subheader("Top businesses and competitors")
+    st.caption("**WBS: US1 · T014 · Activity ranking · T017 · Competitor comparison**")
     if not summaries:
         st.info("No businesses match this source category.")
         return
@@ -344,7 +346,11 @@ def render_business_analysis() -> None:
             )
         _category_comparison(summaries, effective)
         _business_comparison(context, selected, effective, source)
-        with st.expander("Ranking details"):
+        show_ranking = st.query_params.get("wbs") in ("T015", "T018")
+        with st.expander("Ranking details", expanded=show_ranking):
+            if show_ranking:
+                st.subheader("Ranking details", anchor="ranking-details")
+            st.caption("**WBS: US1 · T015 · Ranking explanation · T018 · Explanation interface**")
             st.caption(
                 "Rankings use recorded Yelp check-ins, not customers or revenue, and cover "
                 "the imported city cohort rather than the complete metropolitan market. "

@@ -102,7 +102,8 @@ def render_scope_weather(
     context: ScreenContext, projection: ProjectionResult | None = None
 ) -> None:
     """Compare weather with all matching businesses, independently of map controls."""
-    st.subheader("Weather and recorded activity")
+    st.subheader("Weather and recorded activity", anchor="scope-weather")
+    st.caption("**WBS: US2 · T023 · Weather and activity charts**")
     filters, catalog = context.filters, context.catalog
     businesses = location_businesses.scoped_businesses(catalog, filters)
     if not businesses:
