@@ -1,6 +1,6 @@
 # Data preparation and research
 
-Prepare the source data with notebooks 01 and 02, then import it into PostgreSQL. The current app compares individual businesses within exact source categories; its optional HGB weather-scenario bundle is prepared separately. Run all commands from the repository root.
+Prepare the source data with notebooks 01 and 02, then import it into PostgreSQL. The current app compares individual businesses within exact source categories; its HGB bundle for observed weather and explicit scenarios is prepared separately. Run all commands from the repository root.
 
 | Notebook | Archive | Scope |
 | --- | --- | --- |
@@ -91,6 +91,10 @@ Notebook 04 can prepare both bundles: `TRAIN_APP_HGB=True` fits the full support
 HGB population into its run's `hgb_artifact/`, while `artifact/` holds calendar
 references. `PUBLISH_TO_APP=False` preserves the installed model; enabling it
 publishes only a verified HGB bundle.
+
+Notebooks 04 and 08 default to `Observed weather`, matching the app. A future period
+without complete station reports stays unavailable. Choose `Seasonal weather` or
+`Custom weather` explicitly to explore a scenario; no automatic substitution occurs.
 
 The shared date range retains recorded counts within imported coverage and uses HGB
 strictly after its endpoint. Unsupported businesses stay unavailable; there is no
