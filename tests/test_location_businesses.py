@@ -1,18 +1,13 @@
 """Keep same-niche competitors and recorded dates consistent with the location map."""
 
-import csv
-import io
 from dataclasses import replace
 from datetime import date
 
 import pytest
-import streamlit as st
-from streamlit.testing.v1 import AppTest
 
-from sitesense import location_businesses, location_map, repository
+from sitesense import location_businesses, repository
 from sitesense.business_analysis import BusinessActivity
 from sitesense.models import Business, CandidateArea, Catalog, DateCoverage, Filters
-from sitesense.ui import ScreenContext
 
 START, END = date(2020, 1, 1), date(2020, 1, 10)
 FILTERS = Filters("Philadelphia", "PA", "Restaurants", START, END, source_category="Pizza")
@@ -65,7 +60,6 @@ RECORDS = (
 @pytest.fixture(autouse=True)
 def _clear_caches() -> None:
     location_businesses._business_activity.clear()
-    location_map._rain_effects.clear()
 
 
 def test_exact_niche_and_zip_keep_zero_activity_and_stable_ids() -> None:
@@ -139,81 +133,3 @@ def test_activity_cache_keys_full_scope_and_import_revision(
     location_businesses._business_activity(replace(FILTERS, state="NJ"), "one")
     location_businesses._business_activity(FILTERS, "two")
     assert len(calls) == 4
-
-
-def test_rain_effect_cache_separates_source_categories(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[int] = []
-
-    def calculate(*args: object) -> dict[int, object]:
-        calls.append(1)
-        return {}
-
-    monkeypatch.setattr(location_map, "rain_effects", calculate)
-    context = ScreenContext(FILTERS, CATALOG, (), (), "one")
-    for filters in (FILTERS, FILTERS, replace(FILTERS, source_category="Italian")):
-        location_map._rain_effects(filters, START, END, "r10", "one", context, {})
-    assert len(calls) == 2
-
-
-def _render_map() -> None:
-    from sitesense.location_map import render_location_map
-
-    render_location_map()
-
-
-def test_no_candidate_zips_still_show_niche_metro_competitors_and_scoped_csv(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[Filters] = []
-    downloads: list[str] = []
-
-    def load(filters: Filters) -> tuple[BusinessActivity, ...]:
-        calls.append(filters)
-        return RECORDS
-
-    def download(label: str, data: str, **kwargs: object) -> bool:
-        downloads.append(data)
-        return False
-
-    monkeypatch.setattr(repository, "load_business_activity", load)
-    monkeypatch.setattr(repository, "get_import_revision", lambda: "one")
-    monkeypatch.setattr(st, "download_button", download)
-    filters = replace(FILTERS, start_date=date(2019, 12, 1), end_date=date(2020, 2, 1))
-    app = AppTest.from_function(_render_map)
-    app.session_state["screen_context"] = ScreenContext(filters, CATALOG, (), (), "one")
-    app.run()
-    assert not app.exception
-    assert calls == [FILTERS]
-    assert "Top businesses in Philadelphia" in [heading.value for heading in app.subheader]
-    table = app.container(key="location_businesses").dataframe[0].value
-    assert table["Business ID"].tolist()[0] == "other-zip"
-    assert len(table) == 5
-    ranking = app.selectbox(key="location_business_rank_metric")
-    assert ranking.options == ["Recorded check-ins", "Check-ins / day"]
-    ranking.select("Check-ins / day").run()
-    assert not app.exception
-    assert len(calls) == 1
-    exported = list(csv.DictReader(io.StringIO(downloads[-1])))
-    assert len(exported) == 5
-    assert exported[0]["source_category"] == "Pizza"
-    assert exported[0]["recorded_start"] == START.isoformat()
-    assert exported[0]["recorded_end"] == END.isoformat()
-    assert exported[0]["selected_start"] == "2019-12-01"
-
-
-def test_future_competitor_snapshot_does_not_query_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    def unexpected(filters: Filters) -> tuple[BusinessActivity, ...]:
-        pytest.fail("Future-only competitor view must not query historical activity")
-
-    monkeypatch.setattr(repository, "load_business_activity", unexpected)
-    monkeypatch.setattr(repository, "get_import_revision", lambda: "one")
-    filters = replace(FILTERS, start_date=date(2026, 11, 1), end_date=date(2026, 11, 30))
-    app = AppTest.from_function(_render_map)
-    app.session_state["screen_context"] = ScreenContext(filters, CATALOG, (), (), "one")
-    app.run()
-    assert not app.exception
-    assert app.selectbox(key="location_business_rank_metric").disabled
-    table = app.container(key="location_businesses").dataframe[0].value
-    assert table["Recorded check-ins"].isna().all()
-    assert table["Check-ins / day"].isna().all()
-    assert any("Snapshot listings are shown alphabetically" in info.value for info in app.info)

@@ -16,6 +16,11 @@ The [Census boundary provenance and refresh instructions](zip-weather-map.md#bou
 remain relevant to the current map's weather background. Those polygons provide
 weather context; business activity is displayed at individual business coordinates.
 
-[Data preparation and research](../../data/README.md#retained-location-model-research)
-documents retained model notebooks and outputs separately from the current
-individual-business projection bundle.
+[Data preparation and research](../../data/README.md#individual-business-experiments-and-projections)
+documents the revised business-level notebooks and their separate research and app
+artifacts. Earlier area-based notebooks remain in Git history and saved local runs.
+
+The obsolete ZIP forecast, niche planning and area diagnostics implementations,
+their preparation commands and their isolated tests have been removed. Commands
+shown in these archived documents are historical references. Current business HGB
+training and evaluation baselines remain available in the source checkout.
