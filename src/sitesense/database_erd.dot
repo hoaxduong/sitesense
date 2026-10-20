@@ -15,6 +15,8 @@ digraph sitesense {
 
     business_activity_hourly [label="{business_activity_hourly|PK, FK business_id : text\lPK activity_date : date\lPK hour_of_day : smallint\l|FK dataset_id : bigint\l|checkin_count : integer\ltimestamp_policy : text\l}"];
 
+    review_rating_daily [label="{review_rating_daily|PK, FK business_id : text\lPK review_date : date\l|FK dataset_id : bigint\l|star_sum, review_count : integer\l}"];
+
     station_weather_observations [label="{station_weather_observations|PK, FK weather_cell_id : text\lPK observation_date : date\lPK variable : text\l|FK dataset_id : bigint\l|value : float8 (nullable)\lunit, raw_value, flag : text\lnetwork_id, source_flag : text\lobservation_time_local_standard : text\lis_trace : boolean\l}"];
 
     hourly_weather_observations [label="{hourly_weather_observations|PK station_id : text\lPK observation_time_local_standard : timestamp\l|FK dataset_id : bigint\l|city, state, station_name : text\lutc_offset_hours : smallint\ltemperature_c : float8 (nullable)\lprecipitation_mm : float8 (nullable)\lraw_temperature, raw_precipitation : text\lis_trace : boolean\lreport_type, source_code : text\l|UNIQUE station + truncated hour\l}"];
@@ -25,6 +27,8 @@ digraph sitesense {
     weather_cells -> businesses [taillabel="0..1", headlabel="0..*", label="weather_cell_id"];
     businesses -> business_activity_hourly [taillabel="1", headlabel="0..*",
         label="business_id\nON DELETE CASCADE"];
+    businesses -> review_rating_daily [taillabel="1", headlabel="0..*",
+        label="business_id\nON DELETE CASCADE"];
     weather_cells -> station_weather_observations [taillabel="1", headlabel="0..*",
         label="weather_cell_id"];
 
@@ -33,5 +37,6 @@ digraph sitesense {
     datasets -> weather_cells [taillabel="1", headlabel="0..*", label="dataset_id"];
     datasets -> business_activity_hourly [taillabel="1", headlabel="0..*", label="dataset_id"];
     datasets -> station_weather_observations [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> review_rating_daily [taillabel="1", headlabel="0..*", label="dataset_id"];
     datasets -> hourly_weather_observations [taillabel="1", headlabel="0..*", label="dataset_id"];
 }

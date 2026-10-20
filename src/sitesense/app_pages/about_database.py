@@ -57,6 +57,8 @@ st.markdown(
     "| `business_id` |\n"
     "| `business_activity_hourly` | A positive check-in count for one business/date/hour "
     "| `(business_id, activity_date, hour_of_day)` |\n"
+    "| `review_rating_daily` | Dated review star sum and count for one business/date "
+    "| `(business_id, review_date)` |\n"
     "| `weather_cells` | An ACIS station or legacy ERA5 point, distinguished by `source_kind` "
     "| `weather_cell_id` |\n"
     "| `station_weather_observations` | One daily variable: `tmin`, `tmax` or `pcpn`, "
@@ -77,10 +79,10 @@ st.graphviz_chart(
     erd,
     width="stretch",
     alt=(
-        "Eight-table SiteSense ERD: datasets supplies provenance to five tables; "
-        "businesses optionally reference areas and weather cells; hourly activity references "
-        "businesses; daily observations reference weather cells. Hourly weather has only a "
-        "dataset foreign key, and schema_migrations is independent."
+        "Nine-table SiteSense ERD: datasets supplies provenance to six tables; "
+        "businesses optionally reference areas and weather cells; activity and dated reviews "
+        "reference businesses; daily observations reference weather cells. Hourly weather has "
+        "only a dataset foreign key, and schema_migrations is independent."
     ),
 )
 st.download_button(

@@ -149,9 +149,10 @@ def test_source_activity_query_excludes_substrings_other_parents_and_other_citie
             for day, count in ((date(2020, 1, 19), 2), (date(2021, 1, 19), 3)):
                 connection.execute(
                     """INSERT INTO sitesense.business_activity_hourly
-                           (business_id, activity_date, hour_of_day, checkin_count)
-                       VALUES (%s, %s, 12, %s)""",
-                    (identifier, day, count),
+                           (business_id, activity_date, hour_of_day, checkin_count,
+                            timestamp_policy, dataset_id)
+                       VALUES (%s, %s, 12, %s, 'assumed_source_local', %s)""",
+                    (identifier, day, count, dataset_id),
                 )
     filters = Filters(
         "Philadelphia",

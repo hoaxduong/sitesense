@@ -46,6 +46,13 @@ station mappings. Its completed dataset revision invalidates only hourly display
 caches; model provenance remains tied to the original daily source. See
 [hourly station weather](hourly-weather.md) for commands and sampling rules.
 
+Migration 005 adds `review_rating_daily`: one business/source-calendar date with
+the sum of review stars and review count. The explicit
+[dated review import](../data/README.md#dated-review-ratings) streams the full
+Yelp archive and binds its completed revision to the matching business import.
+It stores no review text or user data. Readers reject stale business bindings;
+review refreshes have their own display revision and do not change model provenance.
+
 The weather seed verifies completed source manifests and checksums, imports observations once per station/report date/variable, and updates business-to-station links in one transaction. Reruns replace that seed instead of adding observations. The existing `weather_cells` table stores spatial points for both legacy ERA5 grids and ACIS stations; `source_kind` distinguishes them. `station_weather_observations` stores normalized native Fahrenheit/inch values together with raw values, trace markers, primary/source flags, network IDs and local standard observation times. Missing values remain null.
 
 Map weather layers and daily weather/activity analysis use ACIS observations, converted to Celsius and millimeters. Accumulated and other unsuitable flags are excluded; trace precipitation is approximately zero with its marker retained. Optional NOAA hourly observations supply richer boxplot samples without replacing ACIS daily inputs. Weather and activity share calendar bins in the charts, but station report windows and unverified check-in timezone labels limit the interpretation of their alignment. County climate scenarios remain separate research inputs.
