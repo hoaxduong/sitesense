@@ -330,6 +330,11 @@ def render_app() -> None:
                 icon=":material/storefront:",
             ),
             st.Page(
+                pages / "site_recommendations.py",
+                title="Site recommendations",
+                icon=":material/pin_drop:",
+            ),
+            st.Page(
                 pages / "about_models.py",
                 title="About our models",
                 icon=":material/model_training:",

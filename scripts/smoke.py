@@ -71,6 +71,7 @@ def main() -> None:
                     ("location_map", "Location map"),
                     ("compare_sites", "Compare businesses"),
                     ("business_analysis", "Business analysis"),
+                    ("site_recommendations", "Site recommendations"),
                 ):
                     app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
                     assert not app.exception, [error.message for error in app.exception]

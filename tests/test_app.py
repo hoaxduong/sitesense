@@ -753,6 +753,7 @@ def test_navigation_contains_exploration_pages() -> None:
         "Location map",
         "Compare businesses",
         "Business analysis",
+        "Site recommendations",
         "About our models",
         "About our database",
         "Use cases",
