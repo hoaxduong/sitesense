@@ -1,4 +1,4 @@
-"""Source-category business locations and recorded activity, without area aggregation."""
+"""Business locations with check-in activity and snapshot ratings shown together."""
 
 import csv
 import io
@@ -78,6 +78,18 @@ def business_rows(
     return rows
 
 
+def _rating_color(stars: float | None) -> list[int]:
+    """Use the same light-to-dark purple rating scale across scopes and dates."""
+    if stars is None:
+        return [128, 135, 132, 170]
+    fraction = max(0.0, min(1.0, (stars - 1) / 4))
+    low, high = (218, 210, 237), (82, 45, 132)
+    channels = [
+        round(start + (end - start) * fraction) for start, end in zip(low, high, strict=True)
+    ]
+    return [*channels, 200]
+
+
 def map_points(rows: list[dict[str, object]], selected_id: str | None) -> list[dict[str, Any]]:
     """Use each listing's own valid coordinates, retaining true zero activity pins."""
     largest = max(
@@ -105,6 +117,7 @@ def map_points(rows: list[dict[str, object]], selected_id: str | None) -> list[d
         activity = cast(
             float | None, row.get("Recorded + projected check-ins", row["Recorded check-ins"])
         )
+        stars = cast(float | None, row["Rating (snapshot)"])
         selected = row["Business ID"] == selected_id
         points.append(
             {
@@ -114,14 +127,11 @@ def map_points(rows: list[dict[str, object]], selected_id: str | None) -> list[d
                 "longitude": longitude,
                 "checkins_text": f"{int(count):,}" if count is not None else "Unavailable",
                 "projected_text": f"{estimated:,.2f}" if estimated is not None else "Unavailable",
+                "rating_text": f"{stars:.1f} / 5" if stars is not None else "Unavailable",
                 "radius": max(4.0, 23 * math.sqrt(float(activity) / largest))
                 if activity is not None and largest
                 else 4.0,
-                "fill_color": (
-                    [113, 85, 138, 180] if "Projected check-ins" in row else [38, 116, 90, 180]
-                )
-                if activity is not None
-                else [128, 135, 132, 170],
+                "fill_color": _rating_color(stars),
                 "line_color": [25, 47, 41, 255] if selected else [255, 255, 255, 220],
                 "line_width": 3 if selected else 1,
             }
@@ -321,6 +331,7 @@ def _render_map(
                     projected_period=business_tooltip.period_label(*projection.interval)
                     if projection is not None and projection.interval is not None
                     else None,
+                    rating=str(point["rating_text"]),
                     weather=point if show_weather else None,
                     weather_period=business_tooltip.period_label(
                         weather.start_date, weather.end_date
@@ -381,10 +392,17 @@ def _render_map(
                 key="business_map_deck",
                 on_select=_select_map_business,
                 selection_mode="single-object",
-                alt="Individual businesses sized by activity above mapped-station weather",
+                alt="Businesses sized by check-ins and colored by snapshot rating over weather",
             )
         if show_weather and weather is not None:
-            business_weather_layer.render_legend(weather)
+            business_weather_layer.render_legend(
+                weather, circle_metric="check-in size and rating color"
+            )
+        st.caption(
+            "Circle size: check-ins · Circle color: Yelp snapshot rating "
+            "(1 light → 5 dark purple; gray unavailable). "
+            "Selected dates apply to check-ins and weather; ratings describe the archive snapshot."
+        )
         st.caption(
             f"Top {len(points):,} of {mapped_count:,} mapped businesses · "
             + (
@@ -450,10 +468,24 @@ def _render_recorded(context: ScreenContext) -> None:
     total = (
         sum(cast(int, row["Recorded check-ins"]) for row in rows) if records is not None else None
     )
+    ratings = [
+        float(cast(float, row["Rating (snapshot)"]))
+        for row in rows
+        if row["Rating (snapshot)"] is not None
+    ]
     with st.container(horizontal=True):
         st.metric("Matching businesses", f"{len(rows):,}", border=True)
         st.metric(
             "Recorded check-ins", f"{total:,}" if total is not None else "Unavailable", border=True
+        )
+        st.metric(
+            "Average rating (snapshot)",
+            f"{sum(ratings) / len(ratings):.2f} / 5" if ratings else "Unavailable",
+            border=True,
+            help=(
+                f"Unweighted average across {len(ratings):,} rated listings; "
+                "missing ratings excluded."
+            ),
         )
         if projection.interval is not None:
             st.metric(

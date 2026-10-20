@@ -308,6 +308,7 @@ def test_location_map_uses_business_source_coordinates_and_true_zero_activity(
     assert [(metric.label, metric.value) for metric in app.metric] == [
         ("Matching businesses", "6"),
         ("Recorded check-ins", "160"),
+        ("Average rating (snapshot)", "4.00 / 5"),
     ]
     assert not any(widget.key == "business_map_rank_metric" for widget in app.selectbox)
     table = app.dataframe(key="business_map_table").value
@@ -564,6 +565,7 @@ def test_uncovered_dates_preserve_snapshot_without_false_zero_activity(
         assert [(metric.label, metric.value) for metric in app.metric] == [
             ("Matching businesses", "6"),
             ("Recorded check-ins", "Unavailable"),
+            ("Average rating (snapshot)", "4.00 / 5"),
             ("Projected check-ins", "Unavailable"),
         ]
         assert app.dataframe[0].value["Projected check-ins"].isna().all()
