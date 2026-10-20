@@ -15,7 +15,13 @@ whole business and are never divided among its tags.
 The map combines individual business activity circles with an optional observed
 weather background. It defaults to the top **20** businesses with coordinates;
 choose **10, 20, 50 or 100**. Circle size represents activity over the selected
-dates. Zero or unavailable activity retains a minimum-size circle.
+dates. Zero or unavailable activity retains a minimum-size circle. The same
+circles show Yelp snapshot ratings through a fixed color scale: **1 star is light
+purple, 5 stars dark purple**, and gray means the rating is unavailable. Check-ins
+and ratings appear together, with no dimension switch. The average snapshot
+rating appears beside the check-in total; it is an unweighted mean across rated
+listings in the selected niche and excludes missing ratings. Ratings remain the
+archive snapshot regardless of the selected dates.
 
 The ranking table, CSV and weather background retain the full selected niche,
 including businesses without coordinates. Name search and the table's display
@@ -24,13 +30,22 @@ businesses, then the highlighted **Compare businesses** button to open their
 comparison. Selections use stable
 business IDs, so duplicate names and search-hidden picks remain distinct.
 
-Hover a circle for its recorded/projected counts, separate activity dates and
-station-weather summary. Selecting a circle highlights it; individual comparison
+Hover a circle for its recorded/projected counts, separate activity dates,
+snapshot star rating and station-weather summary. The ranking table and CSV keep
+check-ins and ratings side by side, with rankings based on check-ins.
+Selecting a circle highlights it; individual comparison
 belongs on **Compare businesses**.
 
 **Weather and recorded activity** below the map totals every business matching
 the shared filters, including listings without coordinates. Map limits, name
 search, selected circles and comparison picks do not change this chart.
+The same plot shows a dotted **period review rating** with diamond points on a
+fixed **0–5** star scale. Each point averages retained reviews posted inside its
+calendar period (week, month or year), at the same period midpoint as activity and
+weather. Scope ratings pool reviews from all matching businesses, giving each
+review equal weight. Tooltips show the period bounds and review count for that
+period. Reviews from earlier periods do not carry forward, and periods without
+reviews appear as gaps. No snapshot average is drawn.
 
 The weather background offers mean daily high, mean daily low or precipitation
 from accepted ACIS reports for the requested dates. Packaged area boundaries
@@ -51,6 +66,15 @@ One **Weather and recorded activity** chart shows a distinct line for each
 business against shared weather boxplots. Recorded counts are solid; supported
 projections continue in the same business color with dashed lines. There is no
 separate activity timeline or individual-details panel.
+Dotted period-rating lines and diamond points share the same plotting area and
+business colors, on a fixed **0–5** star scale. Each business retains its own dated
+series, including when two businesses have equal ratings. Each point averages only
+that business's reviews posted inside the calendar period. Periods without reviews
+remain gaps, and future periods are unavailable.
+No rating is forecast or borrowed from the business snapshot. These are averages
+reconstructed from retained dated reviews, not Yelp's historical displayed scores
+or evidence of a weather effect. Prepare the full review source using the
+[dated ratings import](../data/README.md#dated-review-ratings).
 
 The **Business comparison** matrix places recorded check-ins, days with
 check-ins, weekend share, snapshot rating, reviews, operating status and source

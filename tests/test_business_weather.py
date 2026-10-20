@@ -31,6 +31,7 @@ from sitesense.models import (
     HourlyWeatherSample,
     WeatherCell,
 )
+from sitesense.review_ratings import ReviewRatingDay, ReviewRatingHistory
 from sitesense.ui import ScreenContext
 
 START, END = date(2020, 1, 2), date(2020, 1, 4)
@@ -160,6 +161,8 @@ def clear_weather_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     views._business_daily.clear()
     views._business_weather.clear()
     monkeypatch.setattr(app_module, "_import_is_unchanged", lambda revision: True)
+    views._review_rating_history.clear()
+    monkeypatch.setattr(repository, "get_review_rating_revision", lambda: None)
 
 
 @pytest.fixture
@@ -231,7 +234,7 @@ def test_long_history_groups_activity_and_weather_by_year(
     ).run()
     assert not app.exception
     spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
-    weather, activity = spec["layer"]
+    weather, activity = spec["layer"][:2]
     axis = activity["encoding"]["x"]["axis"]
     assert axis == weather["encoding"]["x"]["axis"]
     assert axis["format"] == "%Y"
@@ -290,7 +293,7 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     charts = app.get("vega_lite_chart")
     assert len(charts) == 1
     spec = json.loads(charts[0].proto.spec)
-    weather_layer, activity_layer = spec["layer"]
+    weather_layer, activity_layer = spec["layer"][:2]
     assert spec["resolve"]["scale"]["y"] == "independent"
     assert weather_layer["layer"][0]["mark"]["type"] == "rule"
     assert weather_layer["layer"][0]["encoding"]["y"]["field"] == "Minimum"
@@ -329,6 +332,8 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     )
     activity = _activity_rows(chart_inputs["timeline"][-1])
     assert activity["Recorded check-ins"].tolist() == [4]
+    assert "Average rating (snapshot)" not in activity
+    assert "title" not in spec
     weather_box = _weather_rows(chart_inputs["timeline"][-1])
     assert len(weather_box) == 1
     assert set(weather_box["Series"]) == {"Temperature"}
@@ -355,6 +360,9 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
         "Period end",
         "Covered calendar days",
         "Recorded check-ins",
+        "Rating",
+        "Rating as of",
+        "Review count",
     }
     assert weather_box["Weather source"].str.contains("ACIS").all()
     bands = app.dataframe[1].value
@@ -396,6 +404,151 @@ def test_weather_view_aligns_activity_lines_and_weather_boxes_on_time(
     assert any("band" in warning.value.lower() for warning in app.warning)
 
 
+@pytest.mark.parametrize("stars", [5.0, 0.0, None])
+def test_period_review_ratings_exclude_older_reviews_and_leave_empty_periods_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, list[pd.DataFrame]],
+    stars: float | None,
+) -> None:
+    end = date(2020, 1, 13)
+    history = ReviewRatingHistory(
+        (
+            ReviewRatingDay("a", date(2019, 12, 31), 1, 1),
+            ReviewRatingDay("a", START, 5, 1),
+            ReviewRatingDay("a", date(2020, 1, 8), 4, 1),
+            ReviewRatingDay("other", START, 500, 100),
+        ),
+        DateCoverage(date(2019, 1, 1), end),
+        "reviews-1",
+    )
+    monkeypatch.setattr(views, "_chart_rating_history", lambda *args: history)
+    monkeypatch.setattr(repository, "load_business_daily", lambda *args: ())
+    monkeypatch.setattr(views, "load_daily_station_weather", lambda *args: {})
+    app = _weather_app(
+        business=replace(BUSINESS, stars=stars),
+        filters=replace(FILTERS, end_date=end),
+        coverage=DateCoverage(START, end),
+    ).run()
+
+    assert not app.exception
+    assert len(app.get("vega_lite_chart")) == 1
+    frame = chart_inputs["timeline"][-1]
+    rating = frame.query("Axis == 'rating'")
+    assert rating["Rating"].iloc[:2].tolist() == [5, 4]
+    assert pd.isna(rating["Rating"].iloc[2])
+    assert rating["Review count"].tolist() == [1, 1, 0]
+    assert rating["New reviews"].tolist() == [1, 1, 0]
+    assert rating["Rating mode"].tolist() == ["period"] * 3
+    assert rating["Rating as of"].tolist() == ["2020-01-05", "2020-01-12", "2020-01-13"]
+    assert rating["Rating as of"].tolist() != rating["Period midpoint"].tolist()
+    activity = _activity_rows(frame)
+    pd.testing.assert_series_equal(
+        activity["Rating"].reset_index(drop=True), rating["Rating"].reset_index(drop=True)
+    )
+    assert rating["Period midpoint"].tolist() == activity["Period midpoint"].tolist()
+    assert rating["Period start"].tolist() == ["2020-01-02", "2020-01-06", "2020-01-13"]
+    assert rating["Period end"].tolist() == ["2020-01-05", "2020-01-12", "2020-01-13"]
+    assert "Average rating (snapshot)" not in frame
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    assert "vconcat" not in spec
+    assert "title" not in spec
+    layer = spec["layer"][2]
+    assert layer["transform"] == [{"filter": "datum.Axis === 'rating'"}]
+    assert layer["encoding"]["x"]["field"] == "Period midpoint"
+    assert layer["encoding"]["x"]["type"] == "temporal"
+    assert layer["encoding"]["y"]["field"] == "Rating"
+    assert layer["encoding"]["y"]["scale"]["domain"] == [0, 5]
+    assert layer["mark"]["type"] == "line"
+    assert layer["mark"]["invalid"] == "break-paths-show-domains"
+    assert layer["mark"]["point"]["shape"] == "diamond"
+    tooltip = {item["field"]: item for item in layer["encoding"]["tooltip"]}
+    assert tooltip["Review count"]["title"] == "Reviews in period"
+    assert tooltip["Rating as of"]["title"] == "Reviews through"
+    assert "New reviews" not in tooltip
+    assert any("reviews posted within each" in item.value for item in app.caption)
+
+
+def test_partial_review_coverage_clips_period_reviews_and_keeps_later_ratings_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: dict[str, list[pd.DataFrame]],
+) -> None:
+    end = date(2020, 1, 19)
+    history = ReviewRatingHistory(
+        (
+            ReviewRatingDay("a", date(2020, 1, 3), 5, 1),
+            ReviewRatingDay("a", date(2020, 1, 4), 6, 2),
+            ReviewRatingDay("a", date(2020, 1, 10), 5, 1),
+            ReviewRatingDay("a", date(2020, 1, 11), 1, 1),
+        ),
+        DateCoverage(date(2020, 1, 4), date(2020, 1, 10)),
+        "reviews-partial",
+    )
+    monkeypatch.setattr(views, "_chart_rating_history", lambda *args: history)
+    monkeypatch.setattr(repository, "load_business_daily", lambda *args: ())
+    monkeypatch.setattr(views, "load_daily_station_weather", lambda *args: {})
+    app = _weather_app(
+        filters=replace(FILTERS, end_date=end), coverage=DateCoverage(START, end)
+    ).run()
+    assert not app.exception
+    frame = chart_inputs["timeline"][-1]
+    rating = frame.query("Axis == 'rating'")
+    assert rating["Rating"].iloc[:2].tolist() == [3, 5]
+    assert pd.isna(rating["Rating"].iloc[2])
+    assert rating["Review count"].tolist() == [2, 1, 0]
+    assert rating["Rating as of"].iloc[:2].tolist() == ["2020-01-05", "2020-01-10"]
+    assert pd.isna(rating["Rating as of"].iloc[2])
+    assert rating["Period midpoint"].tolist() == _activity_rows(frame)["Period midpoint"].tolist()
+
+
+def test_snapshot_stars_never_become_a_historical_rating_when_reviews_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch, chart_inputs: dict[str, list[pd.DataFrame]]
+) -> None:
+    monkeypatch.setattr(repository, "load_business_daily", lambda *args: ())
+    monkeypatch.setattr(views, "load_daily_station_weather", lambda *args: {})
+    app = _weather_app().run()
+    assert not app.exception
+    frame = chart_inputs["timeline"][-1]
+    assert "rating" not in set(frame["Axis"])
+    assert "Rating (snapshot)" not in frame
+    spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
+    assert len(spec["layer"]) == 2
+    assert any("Dated ratings are unavailable" in item.value for item in app.caption)
+
+
+def test_review_rating_cache_tracks_its_own_revision_and_selected_business_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = ["reviews-1"]
+    calls: list[tuple[Filters, tuple[str, ...] | None]] = []
+
+    def load(filters: Filters, identifiers: tuple[str, ...] | None) -> ReviewRatingHistory:
+        calls.append((filters, identifiers))
+        return ReviewRatingHistory((ReviewRatingDay("a", START, 4, 1),), COVERAGE, revision[0])
+
+    monkeypatch.setattr(repository, "get_review_rating_revision", lambda: revision[0])
+    monkeypatch.setattr(repository, "load_review_rating_history", load)
+    assert views._chart_rating_history(FILTERS, ("a",)).revision == "reviews-1"
+    assert views._chart_rating_history(FILTERS, ("a",)).revision == "reviews-1"
+    assert calls == [(FILTERS, ("a",))]
+    revision[0] = "reviews-2"
+    assert views._chart_rating_history(FILTERS, ("a",)).revision == "reviews-2"
+    assert calls == [(FILTERS, ("a",)), (FILTERS, ("a",))]
+    assert views._chart_rating_history(FILTERS).revision == "reviews-2"
+    assert calls[-1] == (FILTERS, None)
+
+
+def test_changed_review_import_is_omitted_instead_of_mixing_revisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repository, "get_review_rating_revision", lambda: "expected")
+    monkeypatch.setattr(
+        repository,
+        "load_review_rating_history",
+        lambda *args: ReviewRatingHistory((), COVERAGE, "changed"),
+    )
+    assert views._chart_rating_history(FILTERS, ("a",)) is None
+
+
 def test_all_zero_activity_still_renders_line_and_weather_distribution(
     monkeypatch: pytest.MonkeyPatch, chart_inputs: dict[str, list[pd.DataFrame]]
 ) -> None:
@@ -431,7 +584,7 @@ def test_all_zero_activity_still_renders_line_and_weather_distribution(
         3,
     ]
     spec = json.loads(app.get("vega_lite_chart")[0].proto.spec)
-    weather_layer, activity_layer = spec["layer"]
+    weather_layer, activity_layer = spec["layer"][:2]
     assert weather_layer["layer"][0]["mark"]["type"] == "rule"
     assert weather_layer["layer"][0]["encoding"]["y"]["field"] == "Minimum"
     assert weather_layer["layer"][0]["encoding"]["y2"]["field"] == "Maximum"

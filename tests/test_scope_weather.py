@@ -26,6 +26,7 @@ from sitesense.models import (
     HourlyWeatherSample,
     WeatherCell,
 )
+from sitesense.review_ratings import ReviewRatingDay, ReviewRatingHistory
 from sitesense.ui import ScreenContext
 
 START, END = date(2020, 1, 2), date(2020, 1, 4)
@@ -76,6 +77,25 @@ def _context(filters: Filters = FILTERS) -> ScreenContext:
     )
 
 
+def _rated_context(filters: Filters = FILTERS) -> ScreenContext:
+    context = _context(filters)
+    ratings = {"a": 2.0, "b": None, "unsupported": 5.0, "other": 5.0, "spa": 1.0}
+    return replace(
+        context,
+        catalog=replace(
+            context.catalog,
+            businesses=tuple(
+                replace(
+                    business,
+                    stars=ratings[business.business_id],
+                    review_count=200 if business.business_id == "a" else 1,
+                )
+                for business in context.catalog.businesses
+            ),
+        ),
+    )
+
+
 def _group(identifier: str, rate: float) -> BusinessGroup:
     return BusinessGroup(
         identifier,
@@ -98,6 +118,7 @@ def clean_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     views._scope_daily.clear()
     views._scope_weather.clear()
     monkeypatch.setattr(app_module, "_import_is_unchanged", lambda revision: True)
+    monkeypatch.setattr(views, "_chart_rating_history", lambda *args: None)
     monkeypatch.setattr(hourly_weather, "load_samples", lambda *args: ())
 
 
@@ -108,6 +129,19 @@ def chart_inputs(monkeypatch: pytest.MonkeyPatch) -> list[pd.DataFrame]:
 
     def chart(data: Any = None, spec: Any = None, **kwargs: Any) -> Any:
         captured.append(pd.DataFrame(data).copy())
+        return original(data, spec, **kwargs)
+
+    monkeypatch.setattr(st, "vega_lite_chart", chart)
+    return captured
+
+
+@pytest.fixture
+def chart_specs(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+    original = st.vega_lite_chart
+
+    def chart(data: Any = None, spec: Any = None, **kwargs: Any) -> Any:
+        captured.append(spec)
         return original(data, spec, **kwargs)
 
     monkeypatch.setattr(st, "vega_lite_chart", chart)
@@ -230,6 +264,139 @@ def test_all_business_chart_ignores_map_search_and_selection_and_deduplicates_we
     assert queries == [FILTERS]
 
 
+def _rating_history() -> ReviewRatingHistory:
+    return ReviewRatingHistory(
+        (
+            ReviewRatingDay("scope", date(2019, 12, 31), 4, 1),
+            ReviewRatingDay("scope", START, 2, 1),
+            ReviewRatingDay("scope", START + timedelta(days=1), 15, 3),
+        ),
+        DateCoverage(date(2019, 1, 1), END),
+        "reviews-1",
+    )
+
+
+def test_scope_dated_rating_is_review_weighted_and_independent_of_map_and_activity(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: list[pd.DataFrame],
+    chart_specs: list[dict[str, Any]],
+) -> None:
+    _sources(monkeypatch)
+    calls: list[Filters] = []
+
+    def history(filters: Filters) -> ReviewRatingHistory:
+        calls.append(filters)
+        return _rating_history()
+
+    monkeypatch.setattr(views, "_chart_rating_history", history)
+    app = _app(_rated_context())
+    app.session_state["business_map_limit"] = 1
+    app.session_state["location_business_search"] = "a"
+    app.session_state["business_focus_id"] = "a"
+    app.run()
+    assert not app.exception
+    frame = chart_inputs[-1]
+    activity = frame.query("Axis == 'activity'")
+    rating = frame.query("Axis == 'rating'")
+    assert calls == [FILTERS]
+    assert list(activity["Rating"]) == [17 / 4]
+    assert list(rating["Rating"]) == [17 / 4]
+    assert list(rating["Review count"]) == [4]
+    assert list(rating["New reviews"]) == [4]
+    assert list(rating["Rating mode"]) == ["period"]
+    assert list(rating["Rating as of"]) == [END.isoformat()]
+    assert rating["Period midpoint"].tolist() == activity["Period midpoint"].tolist()
+    assert (
+        rating["Period midpoint"].tolist()
+        == frame.query("Axis == 'weather'")["Weather period"].tolist()
+    )
+    assert frame.query("Axis == 'weather'")["Rating"].isna().all()
+    assert "Average rating (snapshot)" not in frame
+    spec = chart_specs[-1]
+    assert "title" not in spec
+    assert "vconcat" not in spec
+    layer = spec["layer"][2]
+    assert layer["mark"]["type"] == "line"
+    assert layer["encoding"]["x"]["field"] == "Period midpoint"
+    assert layer["encoding"]["y"]["field"] == "Rating"
+    assert layer["encoding"]["y"]["scale"] == {"domain": [0, 5], "nice": False}
+    assert spec["resolve"]["scale"]["y"] == "independent"
+    assert len(app.get("vega_lite_chart")) == 1
+
+    app.session_state["business_map_limit"] = 100
+    app.session_state["location_business_search"] = "unsupported"
+    app.session_state["business_focus_id"] = "unsupported"
+    app.run()
+    assert not app.exception
+    pd.testing.assert_frame_equal(chart_inputs[-1], frame)
+    assert calls == [FILTERS, FILTERS]
+
+    monkeypatch.setattr(repository, "load_scope_daily", lambda filters: ())
+    views._scope_daily.clear()
+    app.run()
+    assert not app.exception
+    activity = chart_inputs[-1].query("Axis == 'activity'")
+    assert list(activity["Recorded check-ins"]) == [0]
+    assert list(activity["Rating"]) == [17 / 4]
+    assert list(activity["Review count"]) == [4]
+
+
+def test_scope_rating_uses_only_reviews_within_selected_period_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: list[pd.DataFrame],
+) -> None:
+    _sources(monkeypatch)
+    monkeypatch.setattr(views, "load_daily_station_weather", lambda *args: {})
+    monkeypatch.setattr(views, "_chart_rating_history", lambda *args: _rating_history())
+    app = _app(_rated_context()).run()
+    assert not app.exception
+    first = chart_inputs[-1].query("Axis == 'rating'")
+    assert first["Rating"].tolist() == [17 / 4]
+    app.session_state["context"] = _rated_context(replace(FILTERS, end_date=START))
+    app.run()
+    assert not app.exception
+    rating = chart_inputs[-1].query("Axis == 'rating'")
+    assert rating["Rating"].tolist() == [2]
+    assert rating["Review count"].tolist() == [1]
+    assert rating["New reviews"].tolist() == [1]
+    assert rating["Rating as of"].tolist() == [START.isoformat()]
+
+
+def test_scope_missing_review_history_never_uses_listing_snapshot_stars(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: list[pd.DataFrame],
+    chart_specs: list[dict[str, Any]],
+) -> None:
+    _sources(monkeypatch)
+    app = _app(_rated_context()).run()
+    assert not app.exception
+    assert "rating" not in set(chart_inputs[-1]["Axis"])
+    assert "Average rating (snapshot)" not in chart_inputs[-1]
+    assert len(chart_specs[-1]["layer"]) == 2
+    assert any("Dated ratings are unavailable" in item.value for item in app.caption)
+
+
+def test_scope_future_dates_never_carry_forward_the_last_rating(
+    monkeypatch: pytest.MonkeyPatch,
+    chart_inputs: list[pd.DataFrame],
+) -> None:
+    def no_recorded_query(*args: Any) -> None:
+        pytest.fail("Outside coverage must not query activity.")
+
+    monkeypatch.setattr(repository, "load_scope_daily", no_recorded_query)
+    monkeypatch.setattr(views, "load_daily_station_weather", lambda *args: {})
+    monkeypatch.setattr(views, "_chart_rating_history", lambda *args: _rating_history())
+    future = date(2026, 1, 1)
+    app = _app(_rated_context(replace(FILTERS, start_date=future, end_date=future))).run()
+    assert not app.exception
+    frame = chart_inputs[-1]
+    assert set(frame["Axis"]) == {"rating"}
+    assert frame["Rating"].isna().all()
+    assert frame["Rating as of"].isna().all()
+    assert frame["Review count"].tolist() == [0]
+    assert len(app.get("vega_lite_chart")) == 1
+
+
 def test_pooled_rainfall_uses_station_values_without_summing_them(
     monkeypatch: pytest.MonkeyPatch, chart_inputs: list[pd.DataFrame]
 ) -> None:
@@ -280,7 +447,7 @@ def test_projection_sums_only_supported_exact_scope_after_coverage(
     monkeypatch: pytest.MonkeyPatch, chart_inputs: list[pd.DataFrame]
 ) -> None:
     _sources(monkeypatch)
-    context = _context(replace(FILTERS, end_date=END + timedelta(days=2)))
+    context = _rated_context(replace(FILTERS, end_date=END + timedelta(days=2)))
     groups = (
         _group("a", 1),
         _group("b", 2),
@@ -303,6 +470,8 @@ def test_projection_sums_only_supported_exact_scope_after_coverage(
     assert list(future["Projected check-ins"]) == [3, 3]
     assert future["Covered calendar days"].sum() == 2
     assert min(future["Period start"]) == (END + timedelta(days=1)).isoformat()
+    assert "Average rating (snapshot)" not in frame
+    assert "rating" not in set(frame["Axis"])
     assert any("2/3 matching businesses modeled" in row.value for row in app.caption)
 
 
