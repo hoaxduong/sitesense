@@ -71,6 +71,7 @@ def main() -> None:
                     ("location_map", "Location map"),
                     ("compare_sites", "Compare businesses"),
                     ("business_analysis", "Business analysis"),
+                    ("site_recommendations", "Site recommendations"),
                 ):
                     app.switch_page(f"src/sitesense/app_pages/{page}.py").run()
                     assert not app.exception, [error.message for error in app.exception]
@@ -78,7 +79,7 @@ def main() -> None:
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, all three exploration pages, and safe setup.")
+            print("Smoke passed: Streamlit server, all four exploration pages, and safe setup.")
         finally:
             process.terminate()
             try:

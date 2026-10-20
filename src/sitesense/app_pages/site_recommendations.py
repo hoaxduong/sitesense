@@ -1,0 +1,3 @@
+from sitesense.site_recommendation.views import render_site_recommendations
+
+render_site_recommendations()

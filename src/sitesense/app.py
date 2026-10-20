@@ -291,6 +291,11 @@ def render_app() -> None:
                 title="Business analysis",
                 icon=":material/storefront:",
             ),
+            st.Page(
+                pages / "site_recommendations.py",
+                title="Site recommendations",
+                icon=":material/pin_drop:",
+            ),
         ],
         position="sidebar",
     )
