@@ -189,6 +189,32 @@ For a weather-only refresh, complete notebook 02 with the intended snapshot, the
 
 Check-ins represent recorded activity, not customers or revenue. Yelp timestamps have no timezone offset, while station dates use provider observation windows. Neither exploration notebook joins activity to weather or estimates causal effects.
 
+## Dated review ratings
+
+Weather/activity charts use period ratings reconstructed from the full dated
+review source. The notebook's `review.jsonl` is only a prefix sample and is not
+used for these charts. After the normal business import, run:
+
+```sh
+uv run --frozen --env-file .env python -m sitesense.database migrate
+uv run --frozen --env-file .env python scripts/prepare_review_ratings.py
+```
+
+This streams the complete local `data/downloads/yelp.zip`, verifies its business
+source matches the imported catalog, and stores daily star sums/counts in
+`review_rating_daily`. Review text and user data are not stored. The import
+publishes atomically after the complete source passes validation; it does not run
+during page rendering. Reimport dated ratings after replacing the business catalog.
+
+Each chart point averages retained reviews posted inside its calendar period
+(week, month or year), at the same period midpoint as the activity and weather
+series. Tooltips show the period bounds and number of reviews in that period.
+Earlier reviews do not carry forward, periods without reviews appear as gaps,
+and future periods remain unavailable. Each business has its own rating series;
+scope summaries pool reviews from matching businesses with equal weight per review.
+These reconstructed review means can differ from Yelp's displayed historical
+score; the archive does not contain a history of those displayed scores.
+
 ## Observed hourly chart weather
 
 The optional NOAA LCDv2 acquisition stores original compressed station/year CSVs,
