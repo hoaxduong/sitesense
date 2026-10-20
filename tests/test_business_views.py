@@ -11,8 +11,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from sitesense import business_views, repository, ui
-from sitesense.app import _activity, _catalog, _categories
+from sitesense import business_activity, business_views, repository
+from sitesense.app import _catalog, _categories
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
 from sitesense.models import Business, Catalog, DateCoverage, Filters
 
@@ -26,7 +26,6 @@ def reset_business_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     _categories.clear()
     _catalog.clear()
-    _activity.clear()
     business_views._business_activity.clear()
     business_views._business_monthly.clear()
 
@@ -566,7 +565,7 @@ def test_queries_cache_by_revision_without_area_queries_or_model_claims(
         pytest.fail("Business comparisons must not load area activity or model estimates.")
 
     monkeypatch.setattr(repository, "load_activity", unexpected_area_query)
-    monkeypatch.setattr(ui, "_activity_forecast", unexpected_area_query)
+    monkeypatch.setattr(business_activity, "load_projection", unexpected_area_query)
     activity_calls = len(imported_businesses.activity_calls)
     monthly_calls = len(imported_businesses.monthly_calls)
     app.text_input(key="business_search").set_value("Same name").run()

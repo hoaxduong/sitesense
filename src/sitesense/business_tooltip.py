@@ -14,6 +14,9 @@ TOOLTIP = {
         '<div style="color:#71558a">Projected check-ins</div>'
         '<div style="font-size:20px;font-weight:600">{tooltip_projected_count}</div>'
         '<div style="color:#59636c">{tooltip_projected_period}</div></div>'
+        '<div style="display:{tooltip_rating_display};margin-top:8px">'
+        '<div style="color:#59636c">Rating (Yelp archive snapshot)</div>'
+        '<div style="font-size:20px;font-weight:600">{tooltip_rating}</div></div>'
         '<div style="display:{tooltip_weather_display};margin-top:10px;padding-top:8px;'
         'border-top:1px solid #dce5df">'
         '<div style="font-weight:600">{tooltip_weather}</div>'
@@ -54,6 +57,7 @@ def fields(
     projected: bool = False,
     projected_count: str | None = None,
     projected_period: str | None = None,
+    rating: str | None = None,
     weather: Mapping[str, Any] | None = None,
     weather_period: str | None = None,
 ) -> dict[str, str]:
@@ -71,6 +75,8 @@ def fields(
         "tooltip_projected_display": "block" if projected_count is not None else "none",
         "tooltip_projected_count": projected_count or "",
         "tooltip_projected_period": projected_period or "",
+        "tooltip_rating_display": "block" if rating is not None else "none",
+        "tooltip_rating": rating or "",
         "tooltip_weather_display": "block" if weather else "none",
         "tooltip_weather": str(observation.get("weather_text", "Weather unavailable")),
         "tooltip_coverage": str(observation.get("weather_coverage", "No accepted observations")),

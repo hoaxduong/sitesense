@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from statistics import mean
 
+import psycopg
+from psycopg.rows import TupleRow
+
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
 from sitesense.business_weather import BusinessDay
 from sitesense.database import connect
@@ -24,10 +27,127 @@ from sitesense.models import (
     StationWeatherSummary,
     WeatherCell,
 )
+from sitesense.review_ratings import ReviewRatingDay, ReviewRatingHistory
 
 
 class DataUnavailableError(ValueError):
     """A completed basic-app import is required; this message contains no secrets."""
+
+
+def _review_rating_dataset(
+    connection: psycopg.Connection[TupleRow],
+) -> tuple[int, str, DateCoverage] | None:
+    """Accept only dated ratings bound to the current completed business import."""
+    table = connection.execute("SELECT to_regclass('sitesense.review_rating_daily')").fetchone()
+    if table is None or table[0] is None:
+        return None
+    rows = connection.execute(
+        """SELECT DISTINCT ON (metadata ->> 'import_key')
+                  metadata ->> 'import_key', id, metadata
+           FROM sitesense.datasets
+           WHERE metadata ->> 'import_key' IN
+                 ('basic_app_businesses_v1', 'basic_app_review_ratings_v1')
+             AND metadata ->> 'status' = 'complete'
+           ORDER BY metadata ->> 'import_key', id DESC"""
+    ).fetchall()
+    datasets = {row[0]: (row[1], row[2]) for row in rows}
+    business = datasets.get("basic_app_businesses_v1")
+    reviews = datasets.get("basic_app_review_ratings_v1")
+    if business is None or reviews is None:
+        return None
+    business_metadata, review_metadata = business[1], reviews[1]
+    if not isinstance(business_metadata, dict) or not isinstance(review_metadata, dict):
+        return None
+    try:
+        business_revision = business_metadata["import_revision"]
+        business_sha256 = business_metadata["source_fingerprints"]["businesses"]["sha256"]
+        revision = review_metadata["import_revision"]
+        coverage = DateCoverage(
+            date.fromisoformat(review_metadata["coverage"]["start_date"]),
+            date.fromisoformat(review_metadata["coverage"]["end_date"]),
+            review_metadata["timestamp_policy"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        not isinstance(business_revision, str)
+        or not business_revision
+        or not isinstance(business_sha256, str)
+        or not business_sha256
+        or review_metadata.get("business_import_revision") != business_revision
+        or review_metadata.get("business_source_sha256") != business_sha256
+        or not isinstance(revision, str)
+        or not revision
+        or coverage.end_date < coverage.start_date
+        or coverage.timestamp_policy != "assumed_source_local"
+    ):
+        return None
+    return int(reviews[0]), revision, coverage
+
+
+def get_review_rating_revision() -> str | None:
+    """Dated review availability never alters activity/model import provenance."""
+    with connect() as connection:
+        dataset = _review_rating_dataset(connection)
+    return dataset[1] if dataset else None
+
+
+def load_review_rating_history(
+    filters: Filters, business_ids: tuple[str, ...] | None = None
+) -> ReviewRatingHistory:
+    """Read full prior review history for the exact city, category and source.
+
+    None aggregates every matching listing as ``scope``; selected IDs retain
+    individual histories. The lower date bound is deliberately absent so a
+    cumulative rating at the first plotted point has all earlier reviews.
+    """
+    if filters.end_date < filters.start_date:
+        raise ValueError("The end date must be on or after the start date.")
+    with connect() as connection:
+        connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        dataset = _review_rating_dataset(connection)
+        if dataset is None:
+            raise DataUnavailableError("Import dated Yelp reviews to show historical ratings.")
+        dataset_id, revision, coverage = dataset
+        if business_ids == ():
+            return ReviewRatingHistory((), coverage, revision)
+        identity = "'scope'" if business_ids is None else "b.business_id"
+        grouping = "r.review_date" if business_ids is None else "b.business_id, r.review_date"
+        source_condition = (
+            " AND b.categories @> ARRAY[%s]::text[]" if filters.source_category is not None else ""
+        )
+        member_condition = (
+            " AND b.business_id = ANY(%s::text[])" if business_ids is not None else ""
+        )
+        parameters: tuple[object, ...] = (
+            dataset_id,
+            filters.city,
+            filters.state,
+            filters.category,
+            filters.end_date,
+        )
+        if filters.source_category is not None:
+            parameters += (filters.source_category,)
+        if business_ids is not None:
+            parameters += (list(business_ids),)
+        rows = connection.execute(
+            f"""SELECT {identity}, r.review_date, sum(r.star_sum), sum(r.review_count)
+                FROM sitesense.review_rating_daily AS r
+                JOIN sitesense.businesses AS b USING (business_id)
+                WHERE r.dataset_id = %s
+                  AND b.canonical_city = %s AND b.canonical_state = %s
+                  AND b.categories @> ARRAY[%s]::text[]
+                  AND r.review_date <= %s"""
+            + source_condition
+            + member_condition
+            + f" GROUP BY {grouping} ORDER BY {grouping}",
+            parameters,
+        ).fetchall()
+    return ReviewRatingHistory(
+        tuple(ReviewRatingDay(row[0], row[1], int(row[2]), int(row[3])) for row in rows),
+        coverage,
+        revision,
+    )
 
 
 def get_hourly_weather_revision() -> str | None:

@@ -15,7 +15,13 @@ whole business and are never divided among its tags.
 The map combines individual business activity circles with an optional observed
 weather background. It defaults to the top **20** businesses with coordinates;
 choose **10, 20, 50 or 100**. Circle size represents activity over the selected
-dates. Zero or unavailable activity retains a minimum-size circle.
+dates. Zero or unavailable activity retains a minimum-size circle. The same
+circles show Yelp snapshot ratings through a fixed color scale: **1 star is light
+purple, 5 stars dark purple**, and gray means the rating is unavailable. Check-ins
+and ratings appear together, with no dimension switch. The average snapshot
+rating appears beside the check-in total; it is an unweighted mean across rated
+listings in the selected niche and excludes missing ratings. Ratings remain the
+archive snapshot regardless of the selected dates.
 
 The ranking table, CSV and weather background retain the full selected niche,
 including businesses without coordinates. Name search and the table's display
@@ -24,13 +30,22 @@ businesses, then the highlighted **Compare businesses** button to open their
 comparison. Selections use stable
 business IDs, so duplicate names and search-hidden picks remain distinct.
 
-Hover a circle for its recorded/projected counts, separate activity dates and
-station-weather summary. Selecting a circle highlights it; individual comparison
+Hover a circle for its recorded/projected counts, separate activity dates,
+snapshot star rating and station-weather summary. The ranking table and CSV keep
+check-ins and ratings side by side, with rankings based on check-ins.
+Selecting a circle highlights it; individual comparison
 belongs on **Compare businesses**.
 
 **Weather and recorded activity** below the map totals every business matching
 the shared filters, including listings without coordinates. Map limits, name
 search, selected circles and comparison picks do not change this chart.
+The same plot shows a dotted **period review rating** with diamond points on a
+fixed **0–5** star scale. Each point averages retained reviews posted inside its
+calendar period (week, month or year), at the same period midpoint as activity and
+weather. Scope ratings pool reviews from all matching businesses, giving each
+review equal weight. Tooltips show the period bounds and review count for that
+period. Reviews from earlier periods do not carry forward, and periods without
+reviews appear as gaps. No snapshot average is drawn.
 
 The weather background offers mean daily high, mean daily low or precipitation
 from accepted ACIS reports for the requested dates. Packaged area boundaries
@@ -51,6 +66,15 @@ One **Weather and recorded activity** chart shows a distinct line for each
 business against shared weather boxplots. Recorded counts are solid; supported
 projections continue in the same business color with dashed lines. There is no
 separate activity timeline or individual-details panel.
+Dotted period-rating lines and diamond points share the same plotting area and
+business colors, on a fixed **0–5** star scale. Each business retains its own dated
+series, including when two businesses have equal ratings. Each point averages only
+that business's reviews posted inside the calendar period. Periods without reviews
+remain gaps, and future periods are unavailable.
+No rating is forecast or borrowed from the business snapshot. These are averages
+reconstructed from retained dated reviews, not Yelp's historical displayed scores
+or evidence of a weather effect. Prepare the full review source using the
+[dated ratings import](../data/README.md#dated-review-ratings).
 
 The **Business comparison** matrix places recorded check-ins, days with
 check-ins, weekend share, snapshot rating, reviews, operating status and source
@@ -87,21 +111,50 @@ when available; otherwise charts use mapped daily ACIS summaries. Precipitation
 uses daily ACIS totals. Shared charts count each mapped station once per date,
 not once per business. See [Observed hourly weather](hourly-weather.md).
 
-Prepare individual-business projections explicitly outside Streamlit:
+Prepare individual-business HGB models explicitly outside Streamlit:
 
 ```sh
-uv run --frozen --env-file .env python scripts/train_business_forecast.py
+uv run --frozen --env-file .env python scripts/train_business_hgb.py
 ```
 
-The read-only training process writes ignored artifacts under
-`models/business_forecast/`. It compares an overall mean with a shrunk
-month/weekday model using forward validation, then fits the selected model on
-2019–2021. Each fit requires first recorded activity by its training start and at
-least 20 training check-ins, retaining zero-activity calendar days. Source tags
-filter membership without changing an individual's prediction. The loader checks
-source, code, lockfile, import and payload provenance together with the expected
-schema, support rules, training windows and validation metrics. Changed or missing
-artifacts make projections unavailable; the app never trains during rendering.
+Training writes ignored `models/business_hgb/models.joblib` and `manifest.json`.
+HGB learns integer daily counts using business identity, month, weekday and accepted
+station temperature/rain. Models cover all supported city/parent-category businesses
+in batches of up to 128 identities, rather than a sampled source niche.
+
+Each training window requires first recorded activity by its start and at least 20
+training check-ins. Covered zero-activity days stay in the panel. HGB trains on days
+with complete accepted weather; the daily-average and seasonal baselines are scored
+on the same held-out weather days. Validation is 2020 after fitting 2017–2019;
+the later assessment is 2021 after fitting 2018–2020. Fixed HGB settings are used
+before that assessment. HGB serves the weather-analysis purpose; the lower-error
+baseline is still reported, without automatically replacing HGB. Final fitting and
+monthly weather references use only 2019–2021.
+
+For projected dates, the sidebar defaults to **Observed weather**: real daily station
+records, independently of the check-in archive's endpoint. HGB estimates activity;
+weather remains measured. A business needs complete low/high temperature and rain
+for every selected projected day, so incomplete totals are never ranked against
+complete totals. Daily chart values use each day's actual weather rather than an
+84-cell calendar approximation.
+
+When observations are missing or a what-if comparison is wanted, explicitly choose
+**Seasonal weather** (training station/month averages) or **Custom weather** (one
+daily low/high/rain tuple applied to the interval). Neither scenario is a live
+forecast. Missing observed data never silently switches to a scenario or baseline.
+Source tags filter whole businesses. Map totals, comparison matrices, daily lines
+and exports share the same estimates and identify the weather basis. Recorded
+check-ins are never replaced by model estimates.
+
+The loader checks payload hashes, model schema, source import revision, code,
+lockfile and package versions before loading trusted local estimators. No training
+occurs during rendering. **About our models** compares three approaches: daily
+average, Poisson regression and HGB. It separates full-population HGB/average
+results from the smaller, matched-day three-model research sample. City/category
+error charts, held-out monthly predictions and a training timeline explain both
+the HGB choice and where the average wins. Compatible saved results can be shown
+without a database connection; the research and app evaluations must share an
+import revision, and artifact/code/lockfile verification remains required.
 
 ## Interpretation
 
@@ -111,7 +164,8 @@ snapshot. Historical opening dates are unavailable, and zero activity does not
 establish whether a business was open. Weather associations do not establish
 causation; activity and weather timestamps are not verified as aligned.
 
-Projections extrapolate archived individual patterns. They do not incorporate
-later market changes, closures, rent or forecast weather, and do not predict a
-new shop's performance. Earlier area-based models and interfaces are documented
+Projections extrapolate archived individual patterns without later market changes,
+closures or rent. They do not predict a new shop's performance. Observed weather
+is measured; scenario weather is a what-if input, not forecast weather.
+Earlier area-based models and interfaces are documented
 in the [research archive](archive/README.md).

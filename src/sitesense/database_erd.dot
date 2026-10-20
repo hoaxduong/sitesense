@@ -1,0 +1,42 @@
+digraph sitesense {
+    graph [rankdir=TB, bgcolor="transparent", pad=0.3, nodesep=0.55, ranksep=0.85];
+    node [shape=record, fontname="Arial", fontsize=12, style=filled,
+          fillcolor="#f4f7fb", color="#52657d", fontcolor="#182b43", margin="0.15,0.10"];
+    edge [fontname="Arial", fontsize=11, color="#52657d", fontcolor="#182b43",
+          arrowsize=0.7, labeldistance=2];
+
+    datasets [fillcolor="#e1ecf8", label="{datasets|PK id : bigint\l|name : text\lsource_uri : text\lversion : text (nullable)\lmetadata : jsonb\lcreated_at : timestamptz\l}"];
+
+    candidate_areas [label="{candidate_areas|PK id : bigint\l|city, state, postal_code : text\ldisplay_name : text\llatitude, longitude : float8 (nullable)\l|UNIQUE (city, state, postal_code)\l}"];
+
+    businesses [fillcolor="#e5f2e9", label="{businesses|PK business_id : text\l|FK area_id : bigint (nullable)\lFK weather_cell_id : text (nullable)\lFK dataset_id : bigint\l|name, address : text\lcity, state, postal_code : text\lcanonical_city, canonical_state : text\lcategories : text[]\lstars : float8 (nullable)\lreview_count : integer\lis_open : boolean\llatitude, longitude : float8 (nullable)\l}"];
+
+    weather_cells [label="{weather_cells|PK weather_cell_id : text\l|FK dataset_id : bigint\l|latitude, longitude : float8\lsource_kind : text\lstation_name : text (nullable)\l}"];
+
+    business_activity_hourly [label="{business_activity_hourly|PK, FK business_id : text\lPK activity_date : date\lPK hour_of_day : smallint\l|FK dataset_id : bigint\l|checkin_count : integer\ltimestamp_policy : text\l}"];
+
+    review_rating_daily [label="{review_rating_daily|PK, FK business_id : text\lPK review_date : date\l|FK dataset_id : bigint\l|star_sum, review_count : integer\l}"];
+
+    station_weather_observations [label="{station_weather_observations|PK, FK weather_cell_id : text\lPK observation_date : date\lPK variable : text\l|FK dataset_id : bigint\l|value : float8 (nullable)\lunit, raw_value, flag : text\lnetwork_id, source_flag : text\lobservation_time_local_standard : text\lis_trace : boolean\l}"];
+
+    hourly_weather_observations [label="{hourly_weather_observations|PK station_id : text\lPK observation_time_local_standard : timestamp\l|FK dataset_id : bigint\l|city, state, station_name : text\lutc_offset_hours : smallint\ltemperature_c : float8 (nullable)\lprecipitation_mm : float8 (nullable)\lraw_temperature, raw_precipitation : text\lis_trace : boolean\lreport_type, source_code : text\l|UNIQUE station + truncated hour\l}"];
+
+    schema_migrations [fillcolor="#f0edf5", label="{schema_migrations|PK version : text\l|checksum : text\lapplied_at : timestamptz\l}"];
+
+    candidate_areas -> businesses [taillabel="0..1", headlabel="0..*", label="area_id"];
+    weather_cells -> businesses [taillabel="0..1", headlabel="0..*", label="weather_cell_id"];
+    businesses -> business_activity_hourly [taillabel="1", headlabel="0..*",
+        label="business_id\nON DELETE CASCADE"];
+    businesses -> review_rating_daily [taillabel="1", headlabel="0..*",
+        label="business_id\nON DELETE CASCADE"];
+    weather_cells -> station_weather_observations [taillabel="1", headlabel="0..*",
+        label="weather_cell_id"];
+
+    edge [style=dashed, color="#748ba8", fontcolor="#52657d"];
+    datasets -> businesses [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> weather_cells [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> business_activity_hourly [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> station_weather_observations [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> review_rating_daily [taillabel="1", headlabel="0..*", label="dataset_id"];
+    datasets -> hourly_weather_observations [taillabel="1", headlabel="0..*", label="dataset_id"];
+}

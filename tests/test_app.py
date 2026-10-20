@@ -1,7 +1,6 @@
 """Served business map, comparison, shared filters and evidence boundaries.
 
-The retired area workspace retains isolated model/view tests. Application
-navigation now stays at individual business and exact source-category level.
+Application navigation stays at individual business and exact source-category level.
 """
 
 import csv
@@ -28,11 +27,12 @@ from sitesense import (
     repository,
     scope_weather_views,
 )
-from sitesense.app import _activity, _catalog, _categories
+from sitesense.app import _catalog, _categories
 from sitesense.business_analysis import BusinessActivity, BusinessMonth
 from sitesense.business_forecast import BusinessGroup, BusinessProjection
 from sitesense.models import Business, Catalog, DateCoverage, Filters
 from sitesense.ui import ScreenContext
+from sitesense.use_cases import USE_CASES
 
 APP_FILE = Path(__file__).resolve().parents[1] / "app.py"
 PAGES = {
@@ -48,7 +48,6 @@ def reset_data_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     for loader in (
         _categories,
         _catalog,
-        _activity,
         business_map._business_activity,
         business_comparison._activity,
         business_views._business_activity,
@@ -309,6 +308,7 @@ def test_location_map_uses_business_source_coordinates_and_true_zero_activity(
     assert [(metric.label, metric.value) for metric in app.metric] == [
         ("Matching businesses", "6"),
         ("Recorded check-ins", "160"),
+        ("Average rating (snapshot)", "4.00 / 5"),
     ]
     assert not any(widget.key == "business_map_rank_metric" for widget in app.selectbox)
     table = app.dataframe(key="business_map_table").value
@@ -565,6 +565,7 @@ def test_uncovered_dates_preserve_snapshot_without_false_zero_activity(
         assert [(metric.label, metric.value) for metric in app.metric] == [
             ("Matching businesses", "6"),
             ("Recorded check-ins", "Unavailable"),
+            ("Average rating (snapshot)", "4.00 / 5"),
             ("Projected check-ins", "Unavailable"),
         ]
         assert app.dataframe[0].value["Projected check-ins"].isna().all()
@@ -753,11 +754,98 @@ def test_navigation_contains_exploration_pages() -> None:
         "Compare businesses",
         "Business analysis",
         "Site recommendations",
+        "About our models",
+        "About our database",
+        "Use cases",
     ]
     assert app.header[0].value == "Location map"
     for removed in ("site_ranking", "customer_activity", "weather_impact", "demand_forecast"):
         with pytest.raises(ValueError):
             _page(app, removed)
+
+
+def test_model_guide_is_standalone_and_does_not_load_database() -> None:
+    app = _app()
+    with patch(
+        "sitesense.app.repository.get_import_revision",
+        side_effect=AssertionError("The model guide must not query the database"),
+    ):
+        app = _page(app, "about_models")
+    assert not app.exception
+    assert app.header[0].value == "About our models"
+    assert not app.selectbox
+    assert len(app.get("vega_lite_chart")) >= 1
+    text = _visible_text(app)
+    for expected in (
+        "How we train",
+        "How we evaluate",
+        "Why we chose HGB",
+        "Poisson",
+        "Daily average",
+    ):
+        assert expected.lower() in text.lower()
+    assert "Database not configured" not in text
+    assert "ZIP" not in text
+
+
+def test_use_case_table_lists_all_tasks_without_loading_database() -> None:
+    app = _app()
+    with patch(
+        "sitesense.app.repository.get_import_revision",
+        side_effect=AssertionError("The use-case index must not query the database"),
+    ):
+        app = _page(app, "use_cases")
+    assert not app.exception
+    table = app.dataframe[0].value
+    assert table["Code"].tolist() == [f"T{number:03}" for number in range(1, 37)]
+    assert len({case.code for case in USE_CASES}) == 36
+    assert table.set_index("Code").loc["T024", "Page"] == "No app screen"
+    assert "Partial" in table.set_index("Code").loc["T020", "Details"]
+    assert not app.selectbox
+
+
+def test_use_case_table_has_direct_section_links_and_no_selection() -> None:
+    app = _page(_app(), "use_cases")
+    table = app.dataframe[0].value.set_index("Code")
+    for case in USE_CASES:
+        if case.page:
+            route = "" if case.page == "location_map" else case.page
+            assert table.loc[case.code, "Open feature"] == (
+                f"./{route}?wbs={case.code}#{case.anchor}"
+            )
+        else:
+            assert table["Open feature"].isna().loc[case.code]
+            assert len(table.loc[case.code, "Details"]) > 25
+    assert not app.dataframe[0].proto.selection_mode
+    assert not app.checkbox
+    assert not app.get("page_link")
+
+
+@pytest.mark.parametrize("code", ["T007", "T008", "T009", "T010", "T025", "T026", "T027"])
+def test_guide_destinations_have_matching_section_anchors(code: str) -> None:
+    case = next(case for case in USE_CASES if case.code == code)
+    app = _page(_app(), case.page)
+    app.query_params["wbs"] = code
+    app.run()
+    assert not app.exception
+    assert any(f"](#{case.anchor})" in item.value for item in app.markdown)
+    assert any(heading.proto.anchor == case.anchor for heading in app.subheader)
+
+
+def test_ranking_link_opens_explanation_and_preserves_filters(imported_data: None) -> None:
+    app = _app()
+    app.selectbox(key="business_source_category").set_value("Pizza").run()
+    dates = app.session_state["date_range"]
+    app = _page(app, "use_cases")
+    app = _page(app, "business_analysis")
+    app.query_params["wbs"] = "T015"
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="business_source_category").value == "Pizza"
+    assert app.session_state["date_range"] == dates
+    details = next(item for item in app.expander if item.label == "Ranking details")
+    assert details.proto.expanded
+    assert any(heading.proto.anchor == "ranking-details" for heading in app.subheader)
 
 
 @pytest.mark.parametrize("page", PAGES)

@@ -16,6 +16,7 @@ from sitesense.business_weather import BusinessDay
 from sitesense.business_weather_views import (
     ActivityWeatherSeries,
     _business_daily,
+    _chart_rating_history,
     _render_activity_weather_chart,
 )
 from sitesense.database import ConfigurationError
@@ -75,6 +76,7 @@ def render_comparison_weather(
         st.info("Choose one to four businesses in the selected source category.")
         return
     st.subheader("Weather and recorded activity")
+    st.caption("**WBS: US2 · T023 · Weather and activity comparison charts**")
     options = ("Temperature (°C)", "Precipitation (mm)")
     if st.session_state.get("comparison_weather_metric") not in options:
         st.session_state["comparison_weather_metric"] = options[0]
@@ -155,6 +157,9 @@ def render_comparison_weather(
     daily_rows = _weather_rows(weather, stations, measures)
     if not hourly and not daily_rows:
         st.info("Weather observations are unavailable. Business activity remains visible.")
+    rating_history = _chart_rating_history(
+        filters, tuple(business.business_id for business in selected)
+    )
     chart_rows = _render_activity_weather_chart(
         dict.fromkeys(measures, ()),
         metric,
@@ -164,6 +169,7 @@ def render_comparison_weather(
         hourly_weather_rows=hourly,
         daily_weather_rows=daily_rows,
         business_series=tuple(series),
+        rating_history=rating_history,
     )
     source = (
         "observed hourly airport reports"
@@ -222,7 +228,16 @@ def render_comparison_weather(
             else "",
             "Projected interval end": end.isoformat() if end > coverage.end_date else "",
             "Import revision": context.import_revision,
+            "Review rating revision": rating_history.revision if rating_history else "",
+            "Review coverage start": rating_history.coverage.start_date.isoformat()
+            if rating_history
+            else "",
+            "Review coverage end": rating_history.coverage.end_date.isoformat()
+            if rating_history
+            else "",
+            "Rating definition": "Mean of retained reviews posted within each chart period",
             "Model revision": projection.model_revision or "",
+            "Weather scenario": projection.weather_basis or "",
         }
         export_rows = [dict(row, **metadata) for row in chart_rows]
         output = io.StringIO()

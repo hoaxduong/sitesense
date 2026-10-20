@@ -23,7 +23,7 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from sitesense import repository, zip_boundaries
-from sitesense.app import _activity, _catalog, _categories
+from sitesense.app import _catalog, _categories
 from sitesense.models import Business, Catalog, DateCoverage, Filters
 from sitesense.site_recommendation import data, explain, scoring, views
 from sitesense.site_recommendation.models import (
@@ -287,7 +287,7 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in ENV_OK:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("SITESENSE_AI_TIMEOUT", raising=False)
-    for loader in (_categories, _catalog, _activity):
+    for loader in (_categories, _catalog):
         loader.clear()
     st.cache_data.clear()
     yield

@@ -11,7 +11,7 @@ import streamlit as st
 from sitesense import hourly_weather, location_businesses, repository
 from sitesense.business_activity import ProjectionResult, daily_projection
 from sitesense.business_weather import BusinessDay, BusinessWeatherDay, pair_business_weather
-from sitesense.business_weather_views import _render_activity_weather_chart
+from sitesense.business_weather_views import _chart_rating_history, _render_activity_weather_chart
 from sitesense.database import ConfigurationError
 from sitesense.location_weather import DailyWeather, load_daily_station_weather
 from sitesense.models import Filters, WeatherCell
@@ -102,7 +102,8 @@ def render_scope_weather(
     context: ScreenContext, projection: ProjectionResult | None = None
 ) -> None:
     """Compare weather with all matching businesses, independently of map controls."""
-    st.subheader("Weather and recorded activity")
+    st.subheader("Weather and recorded activity", anchor="scope-weather")
+    st.caption("**WBS: US2 · T023 · Weather and activity charts**")
     filters, catalog = context.filters, context.catalog
     businesses = location_businesses.scoped_businesses(catalog, filters)
     if not businesses:
@@ -200,6 +201,7 @@ def render_scope_weather(
         projected_days=projected_days,
         observed_coverage=covered or (date.max, date.min),
         daily_weather_rows=weather_rows,
+        rating_history=_chart_rating_history(filters),
     )
     if hourly_rows:
         station_names = "; ".join(sorted({str(row["Weather station"]) for row in hourly_rows}))

@@ -322,7 +322,7 @@ def annotate(points: list[dict[str, Any]], layer: WeatherLayer | None) -> list[d
     return [dict(point, **layer.by_business.get(str(point["business_id"]), {})) for point in points]
 
 
-def render_legend(layer: WeatherLayer | None) -> None:
+def render_legend(layer: WeatherLayer | None, *, circle_metric: str = "activity") -> None:
     """Render the background color scale, with station coverage and source context."""
     if layer is None or not layer.has_values or not layer.features:
         return
@@ -351,7 +351,7 @@ def render_legend(layer: WeatherLayer | None) -> None:
         width=420,
         alt=f"{layer.metric} color scale from {low} to {high}; gray means unknown weather",
     )
-    st.caption("Weather: mapped-station observations · Circles: activity · Gray: unknown")
+    st.caption(f"Weather: mapped-station observations · Circles: {circle_metric} · Gray: unknown")
     available = [row for row in layer.by_business.values() if row["weather_value"] is not None]
     station_count = len({row["weather_station_id"] for row in available})
     with st.expander("Weather layer details"):

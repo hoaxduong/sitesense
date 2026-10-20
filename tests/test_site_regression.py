@@ -33,7 +33,9 @@ print("ok")
 """
 
 
-def run_probe(module: str, kind: str, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def run_probe(
+    module: str, kind: str, extra_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL"}}
     env.update(extra_env)
     return subprocess.run(
@@ -89,9 +91,7 @@ def test_tc129_pure_modules_do_not_import_the_ui_or_data_layers(module: str) -> 
     text = (PACKAGE_DIR / f"{module}.py").read_text(encoding="utf-8")
     tree = ast.parse(text)
     targets = {
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module
     }
     assert "sitesense.site_recommendation.data" not in targets
     assert "sitesense.site_recommendation.views" not in targets

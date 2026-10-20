@@ -78,8 +78,20 @@ def main() -> None:
                     assert app.header[0].value == title
                     assert app.info[0].value == "Database not configured"
                     assert not app.metric
+                app.switch_page("src/sitesense/app_pages/about_models.py").run()
+                assert not app.exception, [error.message for error in app.exception]
+                assert app.header[0].value == "About our models"
+                assert not app.selectbox
+                app.switch_page("src/sitesense/app_pages/about_database.py").run()
+                assert not app.exception, [error.message for error in app.exception]
+                assert app.header[0].value == "About our database"
+                assert not app.selectbox
+                app.switch_page("src/sitesense/app_pages/use_cases.py").run()
+                assert not app.exception, [error.message for error in app.exception]
+                assert app.header[0].value == "Use cases"
+                assert not app.selectbox
             assert process.poll() is None
-            print("Smoke passed: Streamlit server, all four exploration pages, and safe setup.")
+            print("Smoke passed: server, exploration pages, guides, use cases, and safe setup.")
         finally:
             process.terminate()
             try:

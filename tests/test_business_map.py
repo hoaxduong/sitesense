@@ -78,6 +78,18 @@ def _clear_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scope_weather_views, "render_scope_weather", lambda *args, **kwargs: None)
 
 
+def _rating_context() -> ScreenContext:
+    businesses = (
+        replace(_business("quiet-pizza"), stars=None),
+        replace(_business("pizza-a", 39.96, -75.17), stars=1.0),
+        replace(_business("pizza-c"), stars=4.0),
+        replace(_business("pizza-z"), stars=5.0),
+        replace(_business("pizza-b", 39.95, -75.16), stars=4.0),
+        replace(_business("other-niche", tags=("Restaurants", "Pizza Delivery")), stars=5.0),
+    )
+    return replace(CONTEXT, catalog=replace(CATALOG, businesses=businesses))
+
+
 def test_individual_scope_keeps_zero_and_unassigned_listings_without_zip_columns() -> None:
     rows = business_map.business_rows(CONTEXT, RECORDS)
     assert [row["Business ID"] for row in rows] == ["pizza-a", "pizza-b", "quiet-pizza"]
@@ -151,6 +163,60 @@ def test_uncovered_dates_never_make_recorded_zeros_even_if_records_supplied() ->
     assert all(row["Rank"] is None for row in rows)
 
 
+def test_rating_color_is_fixed_while_checkins_determine_order_and_size() -> None:
+    context = _rating_context()
+    rows = business_map.business_rows(context, RECORDS)
+    assert [row["Business ID"] for row in rows] == [
+        "pizza-a",
+        "pizza-b",
+        "pizza-c",
+        "pizza-z",
+        "quiet-pizza",
+    ]
+    assert [row["Rank"] for row in rows] == [1, 2, 3, 4, 5]
+    assert rows[-1]["Rating (snapshot)"] is None
+    points = business_map.map_points(rows, "pizza-b")
+    by_id = {point["business_id"]: point for point in points}
+    assert by_id["pizza-a"]["radius"] == by_id["pizza-b"]["radius"] == 23
+    assert by_id["pizza-z"]["radius"] == 4
+    assert by_id["pizza-a"]["fill_color"] == [218, 210, 237, 200]
+    assert by_id["pizza-z"]["fill_color"] == [82, 45, 132, 200]
+    assert by_id["pizza-b"]["fill_color"] == by_id["pizza-c"]["fill_color"]
+    assert by_id["pizza-b"]["rating_text"] == "4.0 / 5"
+    assert by_id["pizza-b"]["line_width"] == 3
+    assert by_id["quiet-pizza"]["radius"] == 4
+    assert by_id["quiet-pizza"]["rating_text"] == "Unavailable"
+    assert by_id["quiet-pizza"]["fill_color"] == [128, 135, 132, 170]
+    single = business_map.map_points([row for row in rows if row["Business ID"] == "pizza-b"], None)
+    assert single[0]["fill_color"] == by_id["pizza-b"]["fill_color"]
+
+
+def test_snapshot_rating_text_and_color_do_not_change_with_activity_dates() -> None:
+    context = _rating_context()
+    recorded = business_map.map_points(business_map.business_rows(context, RECORDS), None)
+    future = replace(
+        context,
+        filters=replace(FILTERS, start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)),
+    )
+    unavailable = business_map.map_points(business_map.business_rows(future, None), None)
+    assert {
+        point["business_id"]: (point["rating_text"], point["fill_color"]) for point in recorded
+    } == {
+        point["business_id"]: (point["rating_text"], point["fill_color"]) for point in unavailable
+    }
+    assert all(point["checkins_text"] == "Unavailable" for point in unavailable)
+    assert all(point["radius"] == 4 for point in unavailable)
+
+
+def test_imported_zero_star_rating_clamps_to_lowest_color_without_size_error() -> None:
+    catalog = replace(CATALOG, businesses=(replace(_business("zero-stars"), stars=0.0),))
+    context = replace(CONTEXT, catalog=catalog)
+    points = business_map.map_points(business_map.business_rows(context, None), None)
+    assert points[0]["rating_text"] == "0.0 / 5"
+    assert points[0]["fill_color"] == [218, 210, 237, 200]
+    assert points[0]["radius"] == 4
+
+
 def _render() -> None:
     import streamlit as st
 
@@ -185,12 +251,104 @@ def _select_rows(app: AppTest, rows: list[int]) -> AppTest:
     return app.run()
 
 
+def test_map_shows_rating_beside_checkins_without_a_dimension_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _rating_context()
+    app = _app(monkeypatch, context)
+    assert not app.segmented_control
+    assert app.dataframe[0].value["Business ID"].tolist() == [
+        "pizza-a",
+        "pizza-b",
+        "pizza-c",
+        "pizza-z",
+        "quiet-pizza",
+    ]
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["Average rating (snapshot)"] == "3.50 / 5"
+    assert metrics["Recorded check-ins"] == "40"
+    payload = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
+    points = payload["layers"][-1]["data"]
+    assert [point["business_id"] for point in points] == app.dataframe[0].value[
+        "Business ID"
+    ].tolist()
+    assert all(point["tooltip_label"] == "Recorded check-ins" for point in points)
+    assert points[0]["tooltip_count"] == "20"
+    assert points[0]["tooltip_rating"] == "1.0 / 5"
+    assert points[1]["tooltip_rating"] == "4.0 / 5"
+    assert points[-1]["tooltip_rating"] == "Unavailable"
+    assert all(point["tooltip_rating_display"] == "block" for point in points)
+
+
+@pytest.mark.parametrize("outside_coverage", (False, True))
+def test_snapshot_ratings_remain_visible_when_activity_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, outside_coverage: bool
+) -> None:
+    context = _rating_context()
+    if outside_coverage:
+        context = replace(
+            context,
+            filters=replace(FILTERS, start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)),
+        )
+    requests: list[Filters] = []
+    downloads: list[str] = []
+
+    def unavailable(filters: Filters) -> tuple[BusinessActivity, ...]:
+        requests.append(filters)
+        raise psycopg.OperationalError("private database message")
+
+    def download(_label: str, data: str | bytes, **_kwargs: Any) -> bool:
+        downloads.append(data.decode() if isinstance(data, bytes) else data)
+        return False
+
+    monkeypatch.setattr(repository, "load_business_activity", unavailable)
+    monkeypatch.setattr(business_map.st, "download_button", download)
+    monkeypatch.setattr(
+        business_activity,
+        "load_projection",
+        lambda screen: business_activity.ProjectionResult(None),
+    )
+    app = AppTest.from_function(_render)
+    app.session_state["screen_context"] = context
+    app.run()
+    assert not app.exception
+    assert not app.segmented_control
+    metrics = {metric.label: metric.value for metric in app.metric}
+    assert metrics["Average rating (snapshot)"] == "3.50 / 5"
+    assert metrics["Recorded check-ins"] == "Unavailable"
+    table = app.dataframe[0].value
+    assert table["Business ID"].tolist() == [
+        "pizza-a",
+        "pizza-b",
+        "pizza-c",
+        "pizza-z",
+        "quiet-pizza",
+    ]
+    assert table["Recorded check-ins"].isna().all()
+    assert len(requests) == (0 if outside_coverage else 1)
+    exported = list(csv.DictReader(io.StringIO(downloads[-1])))
+    assert [row["Business ID"] for row in exported] == table["Business ID"].tolist()
+    assert all(row["Recorded check-ins"] == "" for row in exported)
+    assert exported[0]["Rating (snapshot)"] == "1.0"
+    assert exported[-1]["Rating (snapshot)"] == ""
+    payload = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
+    points = payload["layers"][-1]["data"]
+    assert all(point["tooltip_count"] == "Unavailable" for point in points)
+    assert points[0]["tooltip_rating"] == "1.0 / 5"
+    assert points[-1]["tooltip_rating"] == "Unavailable"
+    assert "private database message" not in str(app)
+
+
 def test_recorded_map_keeps_scope_weather_independent_of_focused_business(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     weather: list[ScreenContext] = []
     app = _app(monkeypatch)
-    assert [metric.value for metric in app.metric] == ["3", "40"]
+    assert {metric.label: metric.value for metric in app.metric} == {
+        "Matching businesses": "3",
+        "Recorded check-ins": "40",
+        "Average rating (snapshot)": "4.00 / 5",
+    }
     table = app.dataframe[0].value
     assert table["Business ID"].tolist() == ["pizza-a", "pizza-b", "quiet-pizza"]
     assert "ZIP" not in table
@@ -230,6 +388,7 @@ def test_weather_background_keeps_individual_activity_sizes_colors_and_exact_dat
 ) -> None:
     context = replace(CONTEXT, filters=replace(FILTERS, start_date=date(2019, 12, 31)))
     calls: list[tuple[ScreenContext, tuple[str, ...], date, date, str]] = []
+    legend_metrics: list[str] = []
     features = [
         {
             "type": "Feature",
@@ -256,7 +415,11 @@ def test_weather_background_keeps_individual_activity_sizes_colors_and_exact_dat
         )
 
     monkeypatch.setattr(business_weather_layer, "prepare", weather)
-    monkeypatch.setattr(business_weather_layer, "render_legend", lambda layer: None)
+    monkeypatch.setattr(
+        business_weather_layer,
+        "render_legend",
+        lambda layer, *, circle_metric="activity": legend_metrics.append(circle_metric),
+    )
     app = _app(monkeypatch, context)
     payload = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
     background, activity = payload["layers"]
@@ -287,6 +450,9 @@ def test_weather_background_keeps_individual_activity_sizes_colors_and_exact_dat
             "business_map_weather",
         )
     ]
+    assert legend_metrics == ["check-in size and rating color"]
+    assert all(point["tooltip_rating"] == "4.0 / 5" for point in activity["data"])
+    assert all(point["tooltip_rating_display"] == "block" for point in activity["data"])
 
 
 def _projection() -> business_activity.ProjectionResult:
@@ -346,6 +512,39 @@ def test_pure_projected_dates_keep_recorded_counts_unknown_and_export_exact_inte
     assert exported[1]["Projected check-ins"] == ""
 
 
+def test_projected_tooltip_retains_recorded_activity_and_snapshot_rating_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _rating_context()
+    context = replace(context, filters=replace(FILTERS, end_date=date(2020, 1, 12)))
+    projection = _projection()
+    rows = business_map.business_rows(context, RECORDS, projection)
+    assert rows[0]["Business ID"] == "pizza-a"
+    assert rows[0]["Rank"] == 1
+    assert rows[0]["Rating (snapshot)"] == 1
+    assert rows[0]["Projected check-ins"] == 6
+    assert rows[0]["Recorded + projected check-ins"] == 26
+    exported = list(
+        csv.DictReader(io.StringIO(business_map.business_csv(rows, context, projection)))
+    )
+    assert exported[0]["Rating (snapshot)"] == "1.0"
+    assert exported[0]["Projected check-ins"] == "6.0"
+    assert exported[0]["model_revision"] == "model"
+    monkeypatch.setattr(business_activity, "load_projection", lambda screen: projection)
+    app = _app(monkeypatch, context)
+    assert app.dataframe[0].value["Business ID"].tolist() == [row["Business ID"] for row in rows]
+    payload = json.loads(app.get("deck_gl_json_chart")[0].proto.json)
+    points = payload["layers"][-1]["data"]
+    assert all(point["tooltip_label"] == "Recorded check-ins" for point in points)
+    projected = next(point for point in points if point["business_id"] == "pizza-a")
+    assert projected["tooltip_count"] == "20"
+    assert projected["tooltip_projected_count"] == "6.00"
+    assert projected["tooltip_projected_display"] == "block"
+    assert projected["tooltip_rating"] == "1.0 / 5"
+    assert projected["tooltip_rating_display"] == "block"
+    assert projected["fill_color"] == [218, 210, 237, 200]
+
+
 def test_mixed_activity_renders_in_one_map_with_separate_tooltip_totals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -354,12 +553,12 @@ def test_mixed_activity_renders_in_one_map_with_separate_tooltip_totals(
     monkeypatch.setattr(business_activity, "load_projection", lambda screen: projection)
     app = _app(monkeypatch, context)
     assert not app.segmented_control
-    assert [metric.label for metric in app.metric] == [
-        "Matching businesses",
-        "Recorded check-ins",
-        "Projected check-ins",
-    ]
-    assert [metric.value for metric in app.metric] == ["3", "40", "6.00"]
+    assert {metric.label: metric.value for metric in app.metric} == {
+        "Matching businesses": "3",
+        "Recorded check-ins": "40",
+        "Projected check-ins": "6.00",
+        "Average rating (snapshot)": "4.00 / 5",
+    }
     table = app.dataframe[0].value
     assert table["Business ID"].tolist()[0] == "pizza-a"
     assert table.iloc[0]["Recorded check-ins"] == 20
@@ -456,7 +655,11 @@ def test_query_failure_shows_unavailable_activity_but_retains_listings(
     app.session_state["screen_context"] = CONTEXT
     app.run()
     assert not app.exception
-    assert [metric.value for metric in app.metric] == ["3", "Unavailable"]
+    assert {metric.label: metric.value for metric in app.metric} == {
+        "Matching businesses": "3",
+        "Recorded check-ins": "Unavailable",
+        "Average rating (snapshot)": "4.00 / 5",
+    }
     assert app.dataframe[0].value["Recorded check-ins"].isna().all()
     assert not any(select.label == "Rank businesses by" for select in app.selectbox)
     assert "private database message" not in str(app)

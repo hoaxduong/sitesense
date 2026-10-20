@@ -22,6 +22,7 @@ from sitesense.business_weather import (
 from sitesense.database import ConfigurationError
 from sitesense.location_weather import DailyWeather, load_daily_station_weather
 from sitesense.models import Business, Filters, WeatherCell
+from sitesense.review_ratings import ReviewRatingHistory, rating_period_rows
 from sitesense.ui import ScreenContext
 from sitesense.weather_charts import (
     activity_period_rows,
@@ -56,6 +57,28 @@ class ActivityWeatherSeries:
     projected_days: tuple[dict[str, Any], ...] = ()
 
 
+@st.cache_data(ttl=300, max_entries=64, show_spinner=False)
+def _review_rating_history(
+    filters: Filters, business_ids: tuple[str, ...] | None, revision: str
+) -> ReviewRatingHistory:
+    history = repository.load_review_rating_history(filters, business_ids)
+    if history.revision != revision:
+        raise repository.DataUnavailableError("Review ratings changed while loading.")
+    return history
+
+
+def _chart_rating_history(
+    filters: Filters, business_ids: tuple[str, ...] | None = None
+) -> ReviewRatingHistory | None:
+    try:
+        revision = repository.get_review_rating_revision()
+        if revision is not None:
+            return _review_rating_history(filters, business_ids, revision)
+    except (ConfigurationError, psycopg.Error, repository.DataUnavailableError):
+        pass
+    return None
+
+
 def _render_activity_weather_chart(
     days_by_metric: dict[str, tuple[BusinessWeatherDay, ...]],
     metric: str,
@@ -68,6 +91,8 @@ def _render_activity_weather_chart(
     observed_coverage: tuple[date, date] | None = None,
     daily_weather_rows: list[dict[str, Any]] | None = None,
     business_series: tuple[ActivityWeatherSeries, ...] | None = None,
+    rating_history: ReviewRatingHistory | None = None,
+    rating_business_id: str = "scope",
 ) -> list[dict[str, Any]]:
     """Align period activity totals with the same calendar bins as weather boxes."""
     if metric == "Precipitation (mm)":
@@ -104,6 +129,27 @@ def _render_activity_weather_chart(
         ]
         rows.extend(projected_rows)
     business_labels: list[str] = []
+    rating_rows: list[dict[str, Any]] = []
+    rating_tooltip = [
+        {
+            "field": "Rating",
+            "type": "quantitative",
+            "format": ".2f",
+            "title": "Review rating (out of 5)",
+        },
+        {
+            "field": "Rating as of",
+            "type": "temporal",
+            "format": "%Y-%m-%d",
+            "title": "Reviews through",
+        },
+        {
+            "field": "Review count",
+            "type": "quantitative",
+            "format": ",.0f",
+            "title": "Reviews in period",
+        },
+    ]
     if business_series is not None:
         rows = []
         projected_rows = []
@@ -115,7 +161,11 @@ def _render_activity_weather_chart(
                 else series.name
             )
             business_labels.append(label)
-            identity = {"Business": series.name, "Business ID": series.business_id, "Series": label}
+            identity: dict[str, Any] = {
+                "Business": series.name,
+                "Business ID": series.business_id,
+                "Series": label,
+            }
             periods = activity_period_rows(
                 [
                     {"Date": day.activity_date.isoformat(), "Recorded check-ins": day.checkin_count}
@@ -143,6 +193,35 @@ def _render_activity_weather_chart(
                     )
                 )
         rows.extend(projected_rows)
+    if rating_history is not None:
+        if business_series is not None:
+            for series, label in zip(business_series, business_labels, strict=True):
+                rating_rows.extend(
+                    dict(
+                        row,
+                        Axis="rating",
+                        Series=label,
+                        Business=series.name,
+                        **{"Business ID": series.business_id},
+                    )
+                    for row in rating_period_rows(
+                        rating_history, start, end, business_id=series.business_id, mode="period"
+                    )
+                )
+        else:
+            rating_rows = [
+                dict(row, Axis="rating", Series="Review rating")
+                for row in rating_period_rows(
+                    rating_history, start, end, business_id=rating_business_id, mode="period"
+                )
+            ]
+        rating_lookup = {(row["Series"], row["Period"]): row for row in rating_rows}
+        for row in rows:
+            if row["Axis"] == "projection":
+                continue
+            key = (row["Series"] if business_series is not None else "Review rating", row["Period"])
+            if rated := rating_lookup.get(key):
+                row.update({field["field"]: rated[field["field"]] for field in rating_tooltip})
     calendar_periods = activity_period_rows([], start, end)
     period_axis: dict[str, Any] = {
         "title": period.title(),
@@ -203,6 +282,7 @@ def _render_activity_weather_chart(
             "domain": [
                 "Recorded check-ins",
                 *(["Projected check-ins"] if projected_rows else []),
+                *(["Review rating"] if rating_rows else []),
                 *(
                     ["Precipitation mm"]
                     if hourly_weather_rows and metric == "Precipitation (mm)"
@@ -214,6 +294,7 @@ def _render_activity_weather_chart(
             "range": [
                 "#26745a",
                 *(["#7855b8"] if projected_rows else []),
+                *(["#b64662"] if rating_rows else []),
                 "#1c639b" if metric == "Precipitation (mm)" else "#e67e22",
             ],
         },
@@ -297,6 +378,7 @@ def _render_activity_weather_chart(
             "tooltip": [
                 *period_tooltip,
                 {"field": "Recorded check-ins", "type": "quantitative", "format": ",.0f"},
+                *rating_tooltip,
             ],
         },
     }
@@ -328,6 +410,7 @@ def _render_activity_weather_chart(
                     ),
                     *period_tooltip,
                     {"field": "Projected check-ins", "type": "quantitative", "format": ",.1f"},
+                    *rating_tooltip,
                 ],
             },
         }
@@ -335,30 +418,94 @@ def _render_activity_weather_chart(
             "layer": [activity_layer, projection_layer],
             "resolve": {"scale": {"y": "shared"}},
         }
+    rows.extend(rating_rows)
     chart_rows = weather_boxplot_display_rows(rows)
+    spec: dict[str, Any] = {
+        "layer": [weather_layer, activity_layer],
+        "resolve": {"scale": {"y": "independent"}},
+        "height": 350,
+        "autosize": {"type": "fit-x", "contains": "padding", "resize": True},
+        "config": {"numberFormat": ".1f"},
+    }
+    if rating_rows:
+        spec["layer"].append(
+            {
+                "transform": [{"filter": "datum.Axis === 'rating'"}],
+                "mark": {
+                    "type": "line",
+                    "interpolate": "linear",
+                    "invalid": "break-paths-show-domains",
+                    "strokeDash": [2, 3],
+                    "point": {"shape": "diamond", "filled": True, "size": 40},
+                },
+                "encoding": {
+                    "x": {
+                        "field": "Period midpoint",
+                        "type": "temporal",
+                        "title": period.title(),
+                        "axis": period_axis,
+                        "scale": {"type": "utc", "domain": [start.isoformat(), end.isoformat()]},
+                    },
+                    "y": {
+                        "field": "Rating",
+                        "type": "quantitative",
+                        "scale": {"domain": [0, 5], "nice": False},
+                        "axis": {
+                            "title": None,
+                            "orient": "right",
+                            "offset": -30,
+                            "grid": False,
+                            "domain": False,
+                            "ticks": False,
+                            "values": [0, 1, 2, 3, 4, 5],
+                            "labelExpr": "datum.value + '★'",
+                            "labelColor": "#59665f",
+                            "labelFontSize": 10,
+                        },
+                    },
+                    "color": color,
+                    "detail": {"field": "Business ID", "type": "nominal"}
+                    if business_series is not None
+                    else {"field": "Series", "type": "nominal"},
+                    "tooltip": [
+                        *(
+                            [{"field": "Business"}, {"field": "Business ID"}]
+                            if business_series is not None
+                            else []
+                        ),
+                        *period_tooltip,
+                        *rating_tooltip,
+                    ],
+                },
+            }
+        )
     st.vega_lite_chart(
         pd.DataFrame(chart_rows),
-        {
-            "layer": [
-                weather_layer,
-                activity_layer,
-            ],
-            "resolve": {"scale": {"y": "independent"}},
-            "config": {"numberFormat": ".1f"},
-        },
+        spec,
         width="stretch",
-        height=350,
         alt=(
             f"Recorded and projected check-ins with {metric} boxes over shared calendar periods"
             if projected_rows
             else f"Recorded check-ins totaled over the same calendar periods as {metric} boxes"
-        ),
+        )
+        + (" and ratings from dated reviews" if rating_rows else ""),
     )
     st.caption(
         f"Recorded check-ins are totaled for each calendar {period}. "
         + ("Solid: recorded · Dashed: projected. " if projected_rows else "")
         + "Covered dates with no check-ins count as zero; uncovered dates remain unknown."
     )
+    if rating_history is not None:
+        st.caption(
+            f"Dotted lines and diamonds: average stars from reviews posted within each {period}, "
+            "out of 5. Each review has equal weight. Periods without reviews are gaps; "
+            "earlier reviews are not carried forward. Future ratings remain unavailable."
+        )
+    else:
+        st.caption(
+            "Dated ratings are unavailable. "
+            "Import the full review history to display ratings over time."
+        )
     return chart_rows
 
 
@@ -397,6 +544,7 @@ def render_business_weather(
 ) -> None:
     """Render exact-business daily associations within known activity coverage."""
     st.subheader("Weather and recorded activity")
+    st.caption("**WBS: US2 · T023 · Weather and activity charts**")
     catalog = context.catalog
     selected = next(
         (row for row in catalog.businesses if row.business_id == business.business_id), None
@@ -559,8 +707,14 @@ def render_business_weather(
         projected_days=projected_days,
         observed_coverage=(start, end) if has_recorded else (date.max, date.min),
         daily_weather_rows=weather_rows,
+        rating_history=_chart_rating_history(filters, (selected.business_id,)),
+        rating_business_id=selected.business_id,
     )
-    with st.expander("Analysis details"):
+    show_sensitivity = st.query_params.get("wbs") == "T021"
+    with st.expander("Analysis details", expanded=show_sensitivity):
+        if show_sensitivity:
+            st.subheader("Weather sensitivity", anchor="weather-sensitivity")
+        st.caption("**WBS: US2 · T021 · Descriptive weather sensitivity (daily correlations)**")
         st.caption(f"Business ID: {selected.business_id}")
         if station is not None:
             st.caption(
@@ -645,7 +799,13 @@ def render_business_weather(
             column_config={"Date": st.column_config.DateColumn(format="YYYY-MM-DD")},
             alt="Dated daily activity and accepted station observations, retaining missing weather",
         )
-    with st.expander("Weather band summary"):
+    show_bands = st.query_params.get("wbs") == "T020"
+    with st.expander("Weather band summary", expanded=show_bands):
+        if show_bands:
+            st.subheader("Weather band summary", anchor="weather-bands")
+        st.caption(
+            "**WBS: US2 · T020 · Descriptive weather bands; event baseline not implemented**"
+        )
         band_summary = pd.concat(
             [
                 _weather_band_table(days_by_metric[measure], variable, measure)

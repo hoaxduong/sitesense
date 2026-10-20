@@ -46,6 +46,13 @@ station mappings. Its completed dataset revision invalidates only hourly display
 caches; model provenance remains tied to the original daily source. See
 [hourly station weather](hourly-weather.md) for commands and sampling rules.
 
+Migration 005 adds `review_rating_daily`: one business/source-calendar date with
+the sum of review stars and review count. The explicit
+[dated review import](../data/README.md#dated-review-ratings) streams the full
+Yelp archive and binds its completed revision to the matching business import.
+It stores no review text or user data. Readers reject stale business bindings;
+review refreshes have their own display revision and do not change model provenance.
+
 The weather seed verifies completed source manifests and checksums, imports observations once per station/report date/variable, and updates business-to-station links in one transaction. Reruns replace that seed instead of adding observations. The existing `weather_cells` table stores spatial points for both legacy ERA5 grids and ACIS stations; `source_kind` distinguishes them. `station_weather_observations` stores normalized native Fahrenheit/inch values together with raw values, trace markers, primary/source flags, network IDs and local standard observation times. Missing values remain null.
 
 Map weather layers and daily weather/activity analysis use ACIS observations, converted to Celsius and millimeters. Accumulated and other unsuitable flags are excluded; trace precipitation is approximately zero with its marker retained. Optional NOAA hourly observations supply richer boxplot samples without replacing ACIS daily inputs. Weather and activity share calendar bins in the charts, but station report windows and unverified check-in timezone labels limit the interpretation of their alignment. County climate scenarios remain separate research inputs.
@@ -54,7 +61,7 @@ The default declared check-in import interval is 2009-12-30 through 2022-01-19. 
 
 Reimports transactionally replace generated records for the selected city cohorts instead of adding activity counts. Unrelated dataset registry records are retained. Business pins use their listing coordinates; missing coordinates remain missing. ZIP labels and representative area points retained in the schema do not define postal polygons.
 
-The three current pages use recorded activity, snapshot profiles and weather observations. Calendar projections appear within the shared date range only after imported activity coverage ends; covered zero-activity days remain recorded zeros. Unsupported businesses remain unavailable. Train the separate `models/business_forecast/` bundle with the [dataset guide](../data/README.md#current-app-projection-bundle); it records the import revision and source/code/lockfile/payload hashes, and rejects incompatible imports or artifacts on load. These estimates extrapolate archived patterns without future weather, later market changes or new-site success modeling. The older HGB area bundle is retained research and does not supply these business projections.
+The exploration pages use recorded activity, snapshot profiles and weather observations. HGB weather-scenario estimates appear within the shared date range only after imported activity coverage ends; covered zero-activity days remain recorded zeros. Unsupported businesses remain unavailable. Train the separate `models/business_hgb/` bundle with the [dataset guide](../data/README.md#current-app-projection-bundle); it checks import revision, source/code/lockfile provenance, runtime versions and payload hashes. Default inputs are complete real daily station observations, whose coverage is independent of check-in history. Seasonal station/month means and custom weather are explicit what-if alternatives when observations are missing. These estimates do not establish live-weather forecast accuracy, later market changes or new-site success. Calendar baselines remain comparison references, without a silent substitute when HGB is unavailable. The older HGB area bundle is retained research and does not supply these business projections.
 
 ## Migrations
 

@@ -61,12 +61,15 @@ def test_mixed_window_keeps_actual_and_projected_totals_and_dates_distinct() -> 
         period="01 Jan 2022 – 19 Jan 2022",
         projected_count="2.50",
         projected_period="20 Jan 2022 – 31 Jan 2022",
+        rating="4.5 / 5",
     )
     assert result["tooltip_label"] == "Recorded check-ins"
     assert result["tooltip_count"] == "0"
     assert result["tooltip_projected_count"] == "2.50"
     assert result["tooltip_projected_period"] == "20 Jan 2022 – 31 Jan 2022"
     assert result["tooltip_projected_display"] == "block"
+    assert result["tooltip_rating_display"] == "block"
+    assert result["tooltip_rating"] == "4.5 / 5"
 
 
 @pytest.mark.parametrize("weather", [None, {}, {"weather_value": None}])

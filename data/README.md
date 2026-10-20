@@ -1,6 +1,6 @@
 # Data preparation and research
 
-Prepare the source data with notebooks 01 and 02, then import it into PostgreSQL. The current app compares individual businesses within exact source categories; its optional calendar projection bundle is prepared separately. Run all commands from the repository root.
+Prepare the source data with notebooks 01 and 02, then import it into PostgreSQL. The current app compares individual businesses within exact source categories; its HGB bundle for observed weather and explicit scenarios is prepared separately. Run all commands from the repository root.
 
 | Notebook | Archive | Scope |
 | --- | --- | --- |
@@ -32,116 +32,88 @@ uv run --frozen --group notebooks jupyter nbconvert \
 
 Keep source notebook outputs empty. The executed copies are `data/processed/yelp/01_yelp_dataset_exploration.executed.ipynb` and `data/processed/climate/02_climate_dataset_exploration.executed.ipynb`. Raw files, executed copies and generated artifacts stay local and are ignored by Git.
 
-## Current app projection bundle
+## Individual-business experiments and projections
 
-After importing the source data, train the individual-business calendar models outside Streamlit:
+Notebooks 03–08 use the current app's individual-business grain. Choose a canonical metro city/state, parent category (`Restaurants` or `Day Spas`) and exact optional source tag such as `Pizza`. A source tag filters whole listings; overlapping tag totals are not additive. Recorded labels are integer business/calendar-day check-in counts, including covered zero days. There is no ZIP target or per-cohort normalization.
 
-```sh
-uv run --frozen --env-file .env python scripts/train_business_forecast.py
-```
+| Notebook | Purpose | Local outputs |
+| --- | --- | --- |
+| [03 — Business forecast POC](../notebooks/03_location_forecast_poc.ipynb) | Compare overall mean, shrunk month/weekday, Poisson and HGB | `data/processed/business_forecast_poc/` |
+| [04 — Calendar references and app HGB training](../notebooks/04_full_history_forecast_training.ipynb) | Fit calendar references and prepare the verified full-cohort HGB weather model | `data/processed/business_forecast_training/` |
+| [05 — GAM and CatBoost](../notebooks/05_forecast_gam_catboost_comparison.ipynb) | Refit six candidates on the same verified source panels as 03 | `data/processed/business_model_comparison/` |
+| [06 — Model-selection report](../notebooks/06_hgb_model_selection_report.ipynb) | Read verified results in Vietnamese without retraining | `data/processed/business_hgb_selection_report/` |
+| [07 — Beginner explanation](../notebooks/07_hgb_for_beginners.ipynb) | Explain business-level forecasting and HGB with illustrations | `data/processed/business_hgb_for_beginners/` |
+| [08 — Workspace audit](../notebooks/08_project_state_usecase_audit.ipynb) | Inspect source categories, competitors, recorded weather/activity and supported projections | `data/processed/business_workspace_audit/` |
 
-Training reads the imported PostgreSQL cohort and requires complete declared activity coverage for 2017–2021. It compares `overall_mean` and `month_weekday_shrunk` using 2020 validation after fitting 2017–2019, assesses both on 2021 after fitting 2018–2020, then refits the selected model on 2019–2021. Each fit fixes membership to businesses with activity on or before its training start and at least 20 check-ins within that window. The month/weekday model shrinks individual patterns toward the same city/state/parent-category pool.
+Run 01 and 02, then import PostgreSQL using [Local development](../docs/agents/local-development.md). Run 03 before 05, then 06 and 07. Notebook 04 trains calendar references and the app HGB model independently; run it before 08 to audit its new verified HGB bundle. Notebook filenames are retained for stable links; their old ZIP-level experiment logic has been replaced. Existing older run directories remain historical artifacts and are never reused as business-level evidence.
 
-The default output is `models/business_forecast/`:
+### Shared evaluation protocol
 
-| File | Purpose |
-| --- | --- |
-| `businesses.json` | Supported individual businesses, exact source tags and fitted calendar rates |
-| `manifest.json` | Training/evaluation bounds, metrics, import revision and source/code/lockfile/payload hashes |
+- Fit 2017–2019 and choose the model using validation 2020.
+- Independently rebuild the cohort and fit 2018–2020; assess the frozen choice on 2021.
+- Independently rebuild the final cohort and fit 2019–2021 for later scenarios.
 
-Transfer both files with the matching code, `uv.lock` and imported database revision. Loading rejects missing or altered payloads, changed imports, and code or lockfile mismatches; retrain after those inputs change. Artifacts remain local and ignored by Git. Training does not run during page rendering.
+Eligibility uses first recorded activity on or before each fit's start and at least 20 check-ins inside that training window. It never uses test activity or a future last-check-in date. Covered days with no activity are real zeros; missing or out-of-coverage days are unavailable. Profiles and categories remain source snapshots, not point-in-time features. These previously inspected assessment years remain exploratory.
 
-The shared date range determines where estimates appear: covered dates use recorded check-ins, including zero days; only dates after the imported activity endpoint may use projections. Unsupported businesses remain unavailable. The model has no weather features and extrapolates archived calendar patterns; it does not estimate future weather, market growth, revenue or the success of a new shop. See [business workspace](../docs/business-location-workspace.md) and [projection interpretation](../docs/business-location-workspace.md#interpretation).
+The research notebooks default to a deterministic sample of up to 64 training-eligible businesses in Philadelphia → Restaurant → Pizza. Change the visible config for another exact niche. The cap is explicit and bounded at 128 to support HGB business-identity categories; a sample ranking is not a full metro or market ranking. Each run records eligible and sampled members separately for every fit. Calendar priors still use the complete city/parent cohort.
 
-## Retained location-model research
+Weather models use accepted ACIS station/day reports in Celsius and millimeters. All candidates are evaluated on identical accepted-weather business/day keys, and calendar models additionally retain all-covered-day scores. Calendar models train on all covered days; weather candidates train on complete accepted-weather rows. Thus score differences compare these candidate pipelines and do not isolate a pure incremental weather effect. Missing weather is never replaced by a scenario or zero during evaluation.
 
-Notebooks 03–04 document the earlier area-level weather-model experiments. Their rates, catalogs and `models/location_forecast/` bundle are separate from the current individual-business app. References below to the former Forecast UI describe that research workflow; the current pages use `models/business_forecast/`. These notebooks remain useful for reproducing experiments and reports.
+Each complete research run contains metrics, held-out predictions, business-level metrics and rankings, a listing catalog, fitted final estimators and a provenance manifest. The loader verifies source/import fingerprints, exact panels, parent lineage, code, lockfile and every payload. Notebook 05 inherits the verified 03 config and recomputes candidates; the reports use matching completed runs instead of hardcoded historical numbers. Supplied future weather is an explicit scenario; it does not forecast weather or establish causal effects.
 
-### Location forecast POC
+### Current app projection bundle
 
-After the raw files are prepared, open [03 — Location forecast POC](../notebooks/03_location_forecast_poc.ipynb) in the same Jupyter environment. No database or new download is required. The notebook compares three daily models: `calendar_mean`, `poisson_weather` and `hgb_weather`. The target is recorded daily check-ins divided by the fixed historical cohort's business count, for Restaurants and Day Spas. Philadelphia, Nashville and Tampa use dataset-limited county groups rather than official metro boundaries.
-
-Prediction features contain only location coordinates and metro group, industry, calendar month and weekday derived from the requested date, and daily weather (`tmax_c`, `tmin_c`, `precip_mm`). Activity selects the training cohort and supplies labels for training and scoring. Cohort counts supply the label denominator and training weights, but are not predictors; activity lags and trends are also excluded. Validation activity labels stay separate from feature frames.
-
-Train on 2013–2017, select models using 2018, then refit through 2018 and test on 2019. Held-out observed target-day weather makes this a conditional prediction experiment. The default weather model is selected between Poisson and HistGradientBoosting; report the calendar baseline alongside them, including when it wins. Use `model="calendar_mean"` to explore that baseline.
-
-Supply daily weather in Celsius and millimeters to predict any valid date, including dates beyond the snapshot:
-
-```python
-recommend(
-    date="2026-12-15",
-    metro="Tampa",
-    category="Day Spas",
-    weather={"tmax_c": 27, "tmin_c": 19, "precip_mm": 2},
-    top_n=3,
-)
-```
-
-If weather is omitted, only candidate areas whose mapped dominant station has all three usable observations for the requested day are ranked. The notebook reports exclusions and does not fill missing observations with climate normals. Supplied weather represents a scenario; results estimate activity at historical existing businesses, not new-store success or current demand. The cohort inventory may be stale, and no 2026 activity labels are available to validate predictions.
-
-Each run exports `daily_panel.csv`, `validation_metrics.csv`, `test_metrics.csv`, held-out predictions, `sample_predictions.csv`, `sample_summary.csv`, `shortlists.csv` and a provenance manifest under `data/processed/location_forecast_poc/`.
-
-To execute a review copy:
+Run the weather-aware business trainer after importing the source data:
 
 ```sh
-mkdir -p data/processed/location_forecast_poc
-uv run --frozen --group notebooks jupyter nbconvert \
+uv run --frozen --env-file .env python scripts/train_business_hgb.py
+```
+
+It writes ignored `models/business_hgb/models.joblib` and `manifest.json`. HGB uses
+business identity, month, weekday and station low/high temperature and rain. Eligible
+businesses are rebuilt from each training window; batches of up to 128 business IDs
+cover the supported population without the research notebook's sampling cap.
+
+The app uses HGB with observed weather or explicit scenarios, retaining the daily average and seasonal
+model as baselines in matched-day evaluations. It does not claim HGB is the most
+accurate model or automatically replace it with the baseline. Final fitting and
+station/month scenario averages use 2019–2021 only. The default sidebar input uses
+real daily observations, whose date coverage is independent of check-ins. Estimates
+require complete observed weather for the selected projected period. Seasonal and
+custom weather are explicit alternatives when observations are missing or for
+what-if comparisons; neither scenario is a live forecast.
+
+Transfer both files with the matching source code, `uv.lock`, dependency versions
+and imported database revision. The loader rejects changed payloads, imports, code,
+versions or lockfiles. No training occurs during page rendering. The old
+`train_business_forecast.py` script reproduces the calendar baseline bundle.
+Notebook 04 can prepare both bundles: `TRAIN_APP_HGB=True` fits the full supported
+HGB population into its run's `hgb_artifact/`, while `artifact/` holds calendar
+references. `PUBLISH_TO_APP=False` preserves the installed model; enabling it
+publishes only a verified HGB bundle.
+
+Notebooks 04 and 08 default to `Observed weather`, matching the app. A future period
+without complete station reports stays unavailable. Choose `Seasonal weather` or
+`Custom weather` explicitly to explore a scenario; no automatic substitution occurs.
+
+The shared date range retains recorded counts within imported coverage and uses HGB
+strictly after its endpoint. Unsupported businesses stay unavailable; there is no
+calendar fallback. Source tags select whole individual predictions. Neither weather
+scenarios nor calendar baselines predict new-store revenue or opening success.
+See [business workspace](../docs/business-location-workspace.md).
+
+### Execute review copies
+
+Keep source notebook outputs empty. From the repository root, execute each notebook to its ignored output directory, for example:
+
+```sh
+uv run --frozen --group notebooks --env-file .env jupyter nbconvert \
   --to notebook --execute --ExecutePreprocessor.timeout=1800 \
   --output=03_location_forecast_poc.executed \
-  --output-dir=data/processed/location_forecast_poc notebooks/03_location_forecast_poc.ipynb
+  --output-dir=data/processed/business_forecast_poc notebooks/03_location_forecast_poc.ipynb
 ```
 
-Keep source notebook outputs empty. CSVs, the manifest and `03_location_forecast_poc.executed.ipynb` are saved under `data/processed/location_forecast_poc/` and ignored by Git.
-
-### Full history forecast training
-
-[04 — Full history forecast training](../notebooks/04_full_history_forecast_training.ipynb) follows the POC comparison with a reportable training workflow and the retained area-level HGB bundle. Run notebooks 01 and 02 first; notebook 04 reads the verified local Yelp and ACIS files without PostgreSQL or additional downloads. Use the same notebook environment and **Restart Kernel and Run All**.
-
-The steps verify source fingerprints, build county-based metro/category cohorts, aggregate daily check-ins, validate station weather, evaluate HGB against the calendar baseline, refit on the full usable history, and verify exported artifacts. Categories remain Restaurants and Day Spas in Philadelphia, Nashville and Tampa. This is the full available history within that declared scope, not every Yelp city or industry.
-
-Evaluation selects its cohort using activity through 2019, fits on 2010–2019 and validates on 2020. It keeps that catalog, refits through 2020 and tests on 2021. Preprocessing and calendar references are fitted within each training period. This is an exploratory recent-year backtest: 2020–2021 were previously inspected as stress periods, so they are not untouched confirmatory holdouts. Observed target-day weather makes these conditional prediction metrics. HGB settings remain fixed from the notebook 03 comparison; the calendar baseline is retained as a benchmark. Report its results even when it beats HGB. The final model uses an expanded cohort selected within the final training period and all complete usable weather/label rows from 2010-01-01 through 2022-01-18. The two December 2009 events and the censored January 19 archive day are excluded. January 1–18, 2022 remains in training. Historical evaluation metrics belong to the evaluation catalog; they do not establish held-out accuracy for the expanded final catalog or for 2026.
-
-Features contain only metro, category, latitude/longitude, calendar month/weekday and `tmax_c`, `tmin_c`, `precip_mm`. Activity supplies the target, recorded check-ins per historical cohort business per day, and training weights. Cohort business counts, activity history and lags are excluded from predictors. Missing or unsuitable weather is excluded rather than treated as zero. Source-local activity dates are aligned with provider report dates under an explicit research assumption; this is not a validated causal weather relationship.
-
-To execute and retain the reporting copy:
-
-```sh
-mkdir -p data/processed/full_history_forecast
-uv run --frozen --group notebooks jupyter nbconvert \
-  --to notebook --execute --ExecutePreprocessor.timeout=1800 \
-  --output=04_full_history_forecast_training.executed \
-  --output-dir=data/processed/full_history_forecast notebooks/04_full_history_forecast_training.ipynb
-```
-
-Keep source notebook outputs empty. The executed copy is saved at `data/processed/full_history_forecast/04_full_history_forecast_training.executed.ipynb`. Each timestamped `run_<timestamp>/` directory contains `report.md`, `evaluation_metrics.csv`, `evaluation_segments.csv`, `evaluation_predictions.csv`, `annual_coverage.csv`, `cohort_comparison.csv`, `final_training_summary.csv`, figures and a provenance `manifest.json`. Use the executed copy and the run's report together when preparing a presentation. The final fitted bundle is:
-
-| File | Purpose |
-| --- | --- |
-| `models/location_forecast/model.joblib` | Fitted HGB preprocessing/model pipeline |
-| `models/location_forecast/locations.csv` | Final eligible location/category catalog |
-| `models/location_forecast/weather_daily.csv` | Station weather for exact-day observed predictions |
-| `models/location_forecast/baseline.csv` | Full-training historical calendar comparison |
-| `models/location_forecast/manifest.json` | Training bounds, features, evaluation scope, versions and artifact hashes |
-
-The research loader verifies the bundle before loading it and never trains or reads activity during prediction. Supply weather for a requested date, or use a date with complete observed station weather; observed mode reports areas excluded for missing weather. Results rank known source areas by the expected recorded daily rate. There is no weather forecast service or 2026 accuracy validation.
-
-Reports and model artifacts stay local and are ignored by Git. To reproduce this research, run notebook 04 or receive its complete trusted bundle under `models/location_forecast/`, matching the recorded runtime package versions. This bundle is not required for the current business pages.
-
-For the retained area-level research views, prepare the exact original cohort reference
-from the completed run that produced the installed HGB bundle:
-
-```sh
-uv run --frozen python scripts/prepare_forecast_cohort.py \
-  --run-directory data/processed/full_history_forecast/run_20261013T140844558781Z
-```
-
-This verifies the run's source and artifact hashes against the current bundle, then copies
-`final_cohort.csv`, `final_areas.csv`, and the parent manifest into
-`models/location_forecast/cohort/`. Transfer this small directory with the model bundle.
-The retained area-level views query recorded activity for those exact members using the
-original denominator rather than snapshot business counts. Missing or changed members invalidate their ZIP's
-normalization. Missing references keep the count and rate axes separate. Preparation does
-not retrain or alter model weights.
+Use the corresponding notebook and output directory from the table for 04–08. Notebook 08 uses read-only database access and reconciles recorded totals with business-level exports. Reports expose parent-run overrides; their default is the latest complete compatible business run. Old area-model bundles under `models/location_forecast/` and `models/niche_forecast/` remain separate historical research artifacts.
 
 ## Local files and reruns
 
@@ -156,9 +128,14 @@ Use the same layout for both datasets: `data/downloads/` holds cached archives, 
 | `data/raw/climate/` | Canonical `yelp_stations/`, `yelp_counties/`, `yelp_scope/` and retained `sources/` |
 | `data/processed/yelp/` | Yelp coverage/activity CSVs and `exploration_manifest.json`; plots are embedded in the executed notebook |
 | `data/processed/climate/` | Climate quality/coverage/scenario CSVs, figures and `manifest.json` |
-| `data/processed/location_forecast_poc/` | Forecast comparison/ranking CSVs, manifest and executed POC notebook |
-| `data/processed/full_history_forecast/` | Full-history training report, evaluation/coverage exports and executed notebook |
-| `models/business_forecast/` | Current individual-business calendar bundle: `businesses.json` and `manifest.json` |
+| `data/processed/business_forecast_poc/` | Individual-business POC metrics, predictions, estimators and executed notebook |
+| `data/processed/business_forecast_training/` | Verified calendar training runs, production-format bundle and executed notebook |
+| `data/processed/business_model_comparison/` | Matched individual-business six-model experiment runs |
+| `data/processed/business_hgb_selection_report/` | Vietnamese business-level model report and executed notebook |
+| `data/processed/business_hgb_for_beginners/` | Illustrated beginner report and executed notebook |
+| `data/processed/business_workspace_audit/` | Live business/source-category audit and executed notebook |
+| `models/business_hgb/` | Current individual-business HGB bundle: `models.joblib` and `manifest.json` |
+| `models/business_forecast/` | Individual-business calendar reference: `businesses.json` and `manifest.json` |
 | `models/location_forecast/` | Retained area-level HGB research bundle and original cohort references |
 
 The Yelp ZIP contains a gzip-compressed TAR. Notebook 01 streams it once to stage the required tables; it does not extract complete review, user or tip tables. Subsequent runs reuse staged files only when the archive, sample size and staged fingerprints match. The review prefix is descriptive and is not a random sample.
@@ -211,6 +188,32 @@ uv run --frozen --env-file .env python -m sitesense.import_data
 For a weather-only refresh, complete notebook 02 with the intended snapshot, then run `uv run --frozen --env-file .env python -m sitesense.import_data --weather-only` for businesses already imported. This leaves Yelp business and activity records in place. See [Database setup](../docs/database.md) for configuration and importer refresh behavior. The app and importer do not download archives; county scenarios remain local research inputs.
 
 Check-ins represent recorded activity, not customers or revenue. Yelp timestamps have no timezone offset, while station dates use provider observation windows. Neither exploration notebook joins activity to weather or estimates causal effects.
+
+## Dated review ratings
+
+Weather/activity charts use period ratings reconstructed from the full dated
+review source. The notebook's `review.jsonl` is only a prefix sample and is not
+used for these charts. After the normal business import, run:
+
+```sh
+uv run --frozen --env-file .env python -m sitesense.database migrate
+uv run --frozen --env-file .env python scripts/prepare_review_ratings.py
+```
+
+This streams the complete local `data/downloads/yelp.zip`, verifies its business
+source matches the imported catalog, and stores daily star sums/counts in
+`review_rating_daily`. Review text and user data are not stored. The import
+publishes atomically after the complete source passes validation; it does not run
+during page rendering. Reimport dated ratings after replacing the business catalog.
+
+Each chart point averages retained reviews posted inside its calendar period
+(week, month or year), at the same period midpoint as the activity and weather
+series. Tooltips show the period bounds and number of reviews in that period.
+Earlier reviews do not carry forward, periods without reviews appear as gaps,
+and future periods remain unavailable. Each business has its own rating series;
+scope summaries pool reviews from matching businesses with equal weight per review.
+These reconstructed review means can differ from Yelp's displayed historical
+score; the archive does not contain a history of those displayed scores.
 
 ## Observed hourly chart weather
 
